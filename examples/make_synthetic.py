@@ -1,4 +1,4 @@
-"""Generate seven small public-domain, synthetic canonical recordings."""
+"""生成七类完全合成、符合公开契约的小型录波。"""
 
 import json
 from pathlib import Path

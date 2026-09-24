@@ -1,4 +1,4 @@
-"""Example: convert a partner CSV with canonical column names to MAT/JSON."""
+"""示例：把已采用标准列名与单位的 CSV 转为 MAT/JSON 输入。"""
 
 import argparse
 import csv
@@ -10,6 +10,7 @@ from scipy.io import savemat
 
 
 def convert(csv_path: Path, meta_path: Path, output_dir: Path) -> Path:
+    """按 CSV 列顺序生成 data/header，并复制事件元数据。"""
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     with csv_path.open(newline="", encoding="utf-8-sig") as source:
         reader = csv.DictReader(source)
@@ -19,6 +20,7 @@ def convert(csv_path: Path, meta_path: Path, output_dir: Path) -> Path:
         data = np.array([[float(row[name]) for name in names] for row in reader], dtype=float)
     if data.ndim != 2 or data.shape[0] < 2:
         raise ValueError("CSV needs at least two data rows")
+    # header 第一列必须与 data 列顺序一致；名称和单位由调用方先完成映射。
     header = np.empty((len(names), 2), dtype=object)
     for index, name in enumerate(names):
         header[index] = (name, "")

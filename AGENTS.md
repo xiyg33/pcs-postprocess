@@ -1,12 +1,12 @@
-# Partner adapter workflow
+# 伙伴数据源接入步骤
 
-This repository contains offline analysis and plotting only. Keep hardware control, proprietary recordings, and site-specific paths in the partner's own repository.
+本仓库只负责离线指标计算和绘图。硬件控制、真实录波和项目专有路径留在伙伴自己的仓库。
 
-When adapting a new source with Codex:
+使用 Codex 接入新来源时：
 
-1. Inspect one representative recording and its event metadata. Record the source names, units, sample time, clock basis, and missing channels.
-2. Create an adapter under `adapters/` or in the partner repository. Convert physical signals to the exact canonical MAT `data/header` columns and write a paired metadata JSON. Preserve original data; write adapted files to a separate directory.
-3. Run `pcs-postprocess validate` on the output. Fix missing fields or units in the adapter, never by silently guessing values in analysis code.
-4. Run a single case with `pcs-postprocess run`, inspect its summary and figure, then run the full batch. Add a small synthetic or sanitized regression case for each new adapter.
+1. 选一例有代表性的原始录波，列出源字段名、单位、采样时间、时间基准、事件参数和缺失通道。先阅读 `docs/input-contract.md`，明确每个源字段对应的标准列。
+2. 在伙伴仓库编写独立适配器；通用 CSV 示例位于 `adapters/csv_to_canonical.py`。为每例输出 `data/header` MAT 和同名 `_meta.json`。只读原始文件，转换结果写入另一个目录。
+3. 运行 `pcs-postprocess validate --mode <模式> --input <转换目录>`。缺字段或单位错误应在适配器中修正，不要在共享分析代码里猜测数值。
+4. 用 `pcs-postprocess run ... --case <编号>` 先处理一例，检查 `summary_<mode>.csv` 和图片；确认无误后再跑整批。为新适配器增加一例合成或脱敏回归数据，并运行 `python -m unittest discover -s tests -v`。
 
-Do not commit generated outputs, private files, or changes to the shared analysis algorithms merely to accommodate one source format. See `docs/input-contract.md` for the public interface.
+注释请解释单位换算、时间对齐、字段取舍的原因，避免只重复代码表面行为。不要提交生成结果、私有数据，也不要为了适配某一种来源而修改共享指标算法。

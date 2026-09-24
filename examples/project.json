@@ -1,0 +1,7 @@
+{
+  "power_base_w": 24000,
+  "voltage_base_peak_v": 310.269,
+  "current_base_peak_a": 51.57,
+  "nominal_frequency_hz": 50,
+  "record_start_nominal_s": 0
+}

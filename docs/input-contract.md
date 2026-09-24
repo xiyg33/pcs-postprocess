@@ -13,7 +13,7 @@ Each case is a pair of files: `case_<integer>_<name>.mat` and `case_<integer>_<n
 | `Vpos_pu` | pu | Optional; otherwise derived from three-phase voltage |
 | `breaker` | 0/1 | Optional; used for protection trip timing |
 
-The JSON requires `mode`, integer `case_index`, nonempty `case_name`, and `time_basis` (`recorded` or `absolute`). `recorded` estimates offset from a measured event edge and uses `record_start_nominal_s` from the project configuration as fallback. `absolute` treats `t_s` as the event metadata clock and applies zero offset. `record_pre_s`, `record_post_s`, and `sim_time_s` are optional. Each mode also needs these numeric metadata fields:
+The JSON requires `mode`, integer `case_index`, nonempty `case_name`, and `time_basis` (`recorded` or `absolute`). `recorded` estimates offset from a measured event edge and uses `record_start_nominal_s` from the project configuration as fallback. `absolute` preserves the original `t_s` values as the event metadata clock, even when the first sample is not zero; it applies no event-edge correction. `record_pre_s`, `record_post_s`, and `sim_time_s` are optional. Each mode also needs these numeric metadata fields:
 
 | Mode | Event start / duration | Additional fields |
 |---|---|---|

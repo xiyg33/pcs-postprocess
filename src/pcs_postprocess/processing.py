@@ -8,7 +8,7 @@ import os
 import numpy as np
 import scipy.io as sio
 
-# Configured by the CLI before processing a batch.
+# 命令入口在处理批次前加载项目额定值；计算过程中统一使用这些基准。
 HIL_P_BASE_W = None
 HIL_V_BASE_PEAK_V = None
 HIL_I_BASE_PEAK_A = None
@@ -60,10 +60,10 @@ PWR_STEP_REASON_TEXT = {
 
 
 def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
-    """Estimate a PWR response edge from five points after the expected event.
+    """从预期事件后的五点连续越限估计功率响应沿。
 
-    This fallback is for the HIL summary only. A five-sample crossing must be
-    followed by a persistent directional response; it is never a command time.
+    这是指标汇总的回退估计。五点越限后还必须出现持续同向响应；
+    检测出的时间是响应沿，不能当作指令下发时间。
     """
     from .step_response import smooth_native
 
@@ -83,7 +83,7 @@ def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
             or np.any(np.diff(t[search]) > 3 * dt)):
         return None, "five_point_missing_samples"
 
-    # Smooth the baseline and response separately, as measure_step does.
+    # 基线和响应分别平滑，避免事件后的阶跃向前泄漏。
     base_y = smooth_native(t[baseline], y[baseline], smooth_ms)
     event = (t >= expected_s) & (t <= expected_s + EDGE_MAX_DEV_S + .05)
     event_t = t[event]
@@ -100,7 +100,7 @@ def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
     for i in range(search_count - 4):
         if not np.all(directed[i:i + 5] >= threshold):
             continue
-        # Reject a spike or ripple burst that lasts only five samples.
+        # 五个采样点的短尖峰仍可能是纹波，还需验证后续持续响应。
         later = directed[i:i + confirm_count]
         if (later.size < confirm_count or np.count_nonzero(later >= threshold) < .8 * confirm_count
                 or float(np.median(later)) < threshold):
@@ -110,7 +110,7 @@ def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
 
 
 def pwr_estimate_unstable_tail(t, y, start, end, measured, smooth_ms=20.0):
-    """Retain marked, provisional amplitude metrics when the tail still drifts."""
+    """末段仍漂移时保留已标注为暂定值的幅值指标。"""
     from .step_response import smooth_native
 
     if (measured["reasons"].get("M_p") != "final_steady_state_unconfirmed"
@@ -135,11 +135,10 @@ def pwr_estimate_unstable_tail(t, y, start, end, measured, smooth_ms=20.0):
 
 
 def pwr_fourth_band_entry(t, y, start, end, measured, smooth_ms=20.0):
-    """Return the fourth outside-to-inside entry into the final-value 5% band.
+    """返回第四次由带外进入末值 ±5% 带的时间。
 
-    This is an estimated HIL display time, not proof that later samples stay
-    inside the band. Count entries on the same 20 ms smoothed first-step signal
-    used by the other metrics; do not inspect the return step after `end`.
+    这是供绘图显示的估计时间，不能证明其后持续稳定。与其他阶跃指标使用
+    同一条 20 ms 平滑曲线，只统计第一段，不读取 `end` 之后的回程阶跃。
     """
     from .step_response import smooth_native
 
@@ -157,16 +156,16 @@ def pwr_fourth_band_entry(t, y, start, end, measured, smooth_ms=20.0):
         return None
     yy = smooth_native(tt, y[event], smooth_ms)
     inside = np.abs(yy - final) <= .05 * abs(final - initial)
-    # A point already inside at the start is not an outside-to-inside entry.
+    # 窗口起点已在带内不算一次由带外进入。
     entries = np.flatnonzero(inside[1:] & ~inside[:-1]) + 1
     return float(tt[entries[3]] - start) if entries.size >= 4 else None
 
 
 def pwr_downsampled_signals(bridged, start=None, end=None):
-    """20 ms smooth P/Q, then interpolate to a 5 ms normalized time grid.
+    """对 P/Q 做 20 ms 平滑，再映射到 5 ms 的统一时间网格。
 
-    Keep raw 5-point edge detection separate. A missing sample or raw time gap
-    remains NaN on the reduced grid, never an interpolated measurement.
+    原始五点沿检测单独进行。缺失采样和原始时间缺口在降采样网格中保持 NaN，
+    不能通过插值伪造测量值。
     """
     from .step_response import smooth_native
 
@@ -294,18 +293,17 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
     return (result, downsampled) if return_downsampled else result
 
 # =============================================================================
-#  汇总判据阈值（基于 2026-07-17 批次 23 case 实测整定）
+#  汇总判据阈值：迁移自原离线流程，具体项目应复核适用性。
 # =============================================================================
 
-PRE_P_TOL_PU   = 0.05   # 事件前 P 均值允许偏差（控制器稳态误差实测 ~3%）
-PRE_PP_TOL_PU  = 0.08   # 事件前 P 峰峰值上限（正常纹波实测 ~0.04 pu）
-PRE_Q_TOL_PU   = 0.40   # 事件前 Q 偏置上限（正常 VSG 无功交换实测 ~0.18 pu，
-                        #   2014 错误平衡点 ~0.73 pu）
-UNSTABLE_PP_PU = 0.50   # 判失稳的 P 峰峰值阈值（2005-2008 实测 ~2.0 pu）
+PRE_P_TOL_PU   = 0.05   # 事件前 P 均值允许偏差
+PRE_PP_TOL_PU  = 0.08   # 事件前 P 峰峰值上限
+PRE_Q_TOL_PU   = 0.40   # 事件前 Q 偏置上限
+UNSTABLE_PP_PU = 0.50   # 判失稳的 P 峰峰值阈值
 
 # FRT 阈值（注意：监测点在 PCC，大功率时线路阻抗压降会使 V+ 明显偏离 1.0 pu）
-FRT_PRE_VP_TOL_PU  = 0.25  # 事件前 V+ 均值允许偏差 (|mean-1.0|)，PCC 处 ±1.0pu 放电实测 ~0.93
-FRT_PRE_VPP_TOL_PU = 0.27  # 事件前 V+ pp 上限（±0.3 pu 正常 ~0.25）
+FRT_PRE_VP_TOL_PU  = 0.25  # 事件前 V+ 均值相对 1 pu 的允许偏差
+FRT_PRE_VPP_TOL_PU = 0.27  # 事件前 V+ 峰峰值上限
 FRT_UNSTABLE_VPP   = 0.35  # 判失稳的 V+ pp 阈值（远超正常纹波，大功率功角摆动）
 
 EDGE_SEARCH_AHEAD_S = 1.0   # 事件沿搜索窗：先验位置之后的长度
@@ -326,7 +324,7 @@ EDGE_PRE_GAP_S         = 1.2   # 基线窗结束到先验的间隔
 EDGE_POST_WINDOW_S     = 0.5   # 事件后统计起始延迟
 NORMALIZED_PRE_EVENT_S = 1.0   # 输出统一保留 1 s 扰动前稳态
 FREQ_REG_EVENT_END_WINDOW_S = 1.0
-# Kept as an alias for compatibility with existing deadband terminology.
+# 保留旧死区术语的别名，避免历史指标列含义改变。
 FREQ_REG_DEADBAND_END_WINDOW_S = FREQ_REG_EVENT_END_WINDOW_S
 FREQ_REG_DEADBAND_P_LIMIT_PU = 0.05
 FREQ_REG_LIMIT_DEVIATIONS_HZ = (0.25, 0.35, 0.5)
@@ -373,7 +371,7 @@ def calculate_instantaneous_current(vabc, iabc):
     amplitude = np.hypot(va, vb)
     keep = amplitude / HIL_V_BASE_PEAK_V >= CURRENT_MIN_VOLTAGE_PU
     kept_indices = indices[keep]
-    # Normalize the voltage first, avoiding division by small/zero voltages.
+    # 先归一化电压，避免在低电压附近直接相除。
     ua, ub = va[keep] / amplitude[keep], vb[keep] / amplitude[keep]
     ip[kept_indices] = ua * ia[keep] + ub * ib[keep]
     iq[kept_indices] = ub * ia[keep] - ua * ib[keep]
@@ -447,7 +445,7 @@ _PROFILES = {
         "edge_step_field":  "V_fault_pu",
         "edge_is_Vp_scale": True,             # Vp 信号 ×Pbase 走统一 W 域阈值
         "edge_max_dev_s":   0.50,             # FRT 录波起点漂移略大
-        # Drawing layouts live in plot_common.py.
+        # 图形布局由 plot_common.py 统一管理。
         # ---- 事件前稳态检查 ----
         "pre_check": "frt",
         # ---- 汇总 CSV 额外列 ----
@@ -775,10 +773,10 @@ def _win_stats(x, mask):
     return float(seg.mean()), float(seg.max() - seg.min())
 
 
-def load_case_file(mat_path):
-    """读取一个 hil_raw .mat，返回 (t_rel, sig dict)。
+def load_case_file(mat_path, absolute=False):
+    """读取公开 MAT 契约，返回所选时间基准及计算所需的信号。
 
-    sig 键：Va Vb Vc Ia Ib Ic P Q f Vp_pu（缺失键报 KeyError 并列出 header）。
+    原始设备字段必须先由各项目的适配器转换；这里不猜测设备信号名。
     """
     d = sio.loadmat(mat_path)
     data = d["data"]
@@ -798,22 +796,23 @@ def load_case_file(mat_path):
         return None
 
     col = {
-        "t":  _find_col(lambda n: n in ("t_s", "timestamps"), "t_s"),
-        "Va": _find_col(lambda n: n == "Va_V" or "Vabc" in n and "[0]" in n, "Va_V"),
-        "Vb": _find_col(lambda n: n == "Vb_V" or "Vabc" in n and "[1]" in n, "Vb_V"),
-        "Vc": _find_col(lambda n: n == "Vc_V" or "Vabc" in n and "[2]" in n, "Vc_V"),
-        "Ia": _find_col(lambda n: n == "Ia_A" or "Iabc" in n and "[0]" in n, "Ia_A"),
-        "Ib": _find_col(lambda n: n == "Ib_A" or "Iabc" in n and "[1]" in n, "Ib_A"),
-        "Ic": _find_col(lambda n: n == "Ic_A" or "Iabc" in n and "[2]" in n, "Ic_A"),
-        "P":  _find_col(lambda n: n == "P_W" or "P_cal" in n, "P_W"),
-        "Q":  _find_col(lambda n: n == "Q_var" or "Q_cal" in n, "Q_var", required=False),
-        "f":  _find_col(lambda n: n == "f_hz" or "PLL" in n, "f_hz", required=False),
-        "breaker": _find_col(lambda n: "breaker" in n, "breaker", required=False),
-        "Vp_logged": _find_col(lambda n: n in ("Vpos_pu", "SIM/Up_pu"), "Vpos_pu", required=False),
+        "t": _find_col(lambda n: n == "t_s", "t_s"),
+        "Va": _find_col(lambda n: n == "Va_V", "Va_V"),
+        "Vb": _find_col(lambda n: n == "Vb_V", "Vb_V"),
+        "Vc": _find_col(lambda n: n == "Vc_V", "Vc_V"),
+        "Ia": _find_col(lambda n: n == "Ia_A", "Ia_A"),
+        "Ib": _find_col(lambda n: n == "Ib_A", "Ib_A"),
+        "Ic": _find_col(lambda n: n == "Ic_A", "Ic_A"),
+        "P": _find_col(lambda n: n == "P_W", "P_W"),
+        "Q": _find_col(lambda n: n == "Q_var", "Q_var", required=False),
+        "f": _find_col(lambda n: n == "f_hz", "f_hz", required=False),
+        "breaker": _find_col(lambda n: n == "breaker", "breaker", required=False),
+        "Vp_logged": _find_col(lambda n: n == "Vpos_pu", "Vpos_pu", required=False),
     }
 
     t_raw = data[:, col["t"]]
-    t_rel = t_raw - t_raw[0]
+    # 录波时间从首样本计时；绝对仿真时间必须保留原点，事件元数据才同轴。
+    t_rel = t_raw if absolute else t_raw - t_raw[0]
     sig = {k: (data[:, c] if c is not None else None) for k, c in col.items() if k != "t"}
 
     # 计算正序电压幅值 V+ (pu)
@@ -976,7 +975,7 @@ def event_times_from_meta(meta):
     ev2_field = prof.get("event2_field")
     if ev2_field:
         ev2_raw = safe_num(meta.get(ev2_field))
-        if ev2_raw + shift > ev1:  # compare on the same effective time axis
+        if ev2_raw + shift > ev1:  # 在同一事件时间轴上比较两次指令
             ev2 = ev2_raw + shift
             ev2_end = ev2 + safe_num(meta.get(prof.get("event2_dur_field", "")))
             last_end = ev2_end
@@ -1033,11 +1032,10 @@ def normalize_case_time(t_sim, ev, disturbance_time=None,
 # =============================================================================
 
 def detect_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior):
-    """Detect the actual FREQ_REG/INERTIA frequency event edge.
+    """从频率录波估计调频或惯量事件沿相对元数据的时间偏移。
 
-    FREQ_REG uses a sustained departure from the measured 50 Hz baseline.
-    INERTIA uses a piecewise-linear ramp fit because its initial deviation is
-    smaller than the recorder noise and cannot be found with a step threshold.
+    调频要求频率持续离开实测基线；惯量用分段线性斜坡拟合起点，
+    因为斜坡初段的变化可能小于录波噪声，阶跃阈值无法可靠定位。
     """
     f = sig.get("f")
     if f is None:
@@ -1064,8 +1062,7 @@ def detect_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior):
     rate = safe_num(meta.get("freq_ramp_rate_hz_per_s"))
     max_dev = ev.get("edge_max_dev_s", EDGE_MAX_DEV_S)
 
-    # INERTIA: fit the known frequency ramp over the complete event window.
-    # This estimates the ramp onset instead of waiting for a large deviation.
+    # 惯量：在完整事件窗内拟合已知斜率，直接估计斜坡起点。
     if abs(rate) > 1e-12:
         ramp_dur = abs(dev / rate)
         if ramp_dur <= 0.0:
@@ -1080,7 +1077,7 @@ def detect_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior):
         if not np.isfinite(dt) or dt <= 0.0:
             return None
 
-        # Downsample the fit only for speed; preserve the signal shape.
+        # 拟合时稀疏取点仅为加速，保留原始信号形状与事件时间轴。
         sample_step = max(1, int(round(0.01 / dt)))
         tt = t_rel[fit_m][::sample_step]
         xx = f[fit_m][::sample_step]
@@ -1098,9 +1095,7 @@ def detect_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior):
         offset = ev["event1_start"] - edge_time
         return offset if abs(offset - offset_prior) <= max_dev else None
 
-    # FREQ_REG: detect the first sustained departure from the measured
-    # baseline.  Thresholds scale with the requested step and noise instead
-    # of using the 50 Hz value as an absolute deviation threshold.
+    # 调频：寻找首次持续离开实测基线的采样点。阈值随指令幅值和噪声缩放。
     if abs(dev) < 0.03:
         return None
     delta = max(4.0 * noise_half, 0.05 * abs(dev), 0.01)
@@ -1490,8 +1485,7 @@ def _check_pre_event(meta, t_sim, sig, ev, P_pu, Q_pu, Vp_pu, f_sig):
 
     ev1 = ev["event1_start"]
     ev1_end = ev["event1_end"]
-    # SIM starts at model initialization; use the displayed final second before
-    # the fault so the startup ramp is not mistaken for an unstable baseline.
+    # SIM 从模型初始化开始录波；只取事件前最后一秒检查稳态，避免把启动爬升误判为失稳。
     pre_window = (min(ev["record_pre"], NORMALIZED_PRE_EVENT_S)
                   if meta.get("data_source") == "sim" else ev["record_pre"])
     pre_m = (t_sim >= ev1 - pre_window) & (t_sim <= ev1 - EDGE_SEARCH_BACK_S)
@@ -1747,10 +1741,10 @@ def event_timing_metadata(meta, ev, offset, offset_source):
 
 
 def prepare_case(mat_path, meta, offset, offset_source):
-    """Prepare aligned, normalized data and statistics without rendering or writing."""
+    """完成对时、窗口归一化和指标计算；此步不绘图或写文件。"""
     base = os.path.basename(mat_path)
     stem = os.path.splitext(base)[0]          # case_XXXX_<name>
-    t_rel, sig = load_case_file(mat_path)
+    t_rel, sig = load_case_file(mat_path, absolute=meta.get("time_basis") == "absolute")
     ev = event_times_from_meta(meta)
     t_sim = t_rel + offset
 

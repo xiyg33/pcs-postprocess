@@ -21,6 +21,8 @@ pcs-postprocess run --mode frt --input examples/generated/frt --output outputs/f
 
 伙伴使用 Codex 时，可以按仓库根目录的 [AGENTS.md](AGENTS.md) 开发自己的适配器。运行测试：`python -m unittest discover -s tests -v`。
 
+已有 FRTtestScript 项目的 HIL 字段和 Simulink `SimulationOutput` 均由该项目自己的 `postprocess_adapters/` 转成上述公开格式；本包的运行命令只读取转换后的文件。
+
 ## 项目边界
 
 分析计算与图片生成来自 FRTtestScript 的现有离线后处理流程。输出是数据和统计结果，不是产品验收判定。`compare/`、Word 报告、RT-LAB 控制脚本及真实录波不在本仓库中。适配器可放在自己的项目仓库，通过输入契约与本包连接。

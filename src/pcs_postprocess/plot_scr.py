@@ -134,8 +134,7 @@ def detect_manual_fault_time(t_rel, P, breaker, sig=None):
     win = max(5, int(round(0.048 / dt)))
     P_sm = np.convolve(P, np.ones(win) / win, mode="valid")
     t_sm = t_rel[win // 2:win // 2 + len(P_sm)]
-    # Manual recordings often contain a long controller/PLL startup transient.
-    # Use the later part of the initial stable section as the P baseline.
+    # 手动录波可能含有较长的控制器启动过程；功率基线取初始稳定段的后半段。
     base_m = (t_sm >= t_rel[0] + 1.0) & (t_sm <= t_rel[0] + 1.8)
     if np.count_nonzero(base_m) < 20:
         base_m = (t_sm >= t_rel[0] + 0.7) & (t_sm <= t_rel[0] + 1.5)
@@ -161,10 +160,8 @@ def detect_manual_fault_time(t_rel, P, breaker, sig=None):
             if candidates.size:
                 return float(t_rel[candidates[0]] - 0.04), "breaker"
 
-    # Some manual charge recordings do not trip the breaker and have no clear
-    # P edge.  Only inspect the expected late-test window, after startup, and
-    # mark this fallback in the title/log so it is not mistaken for a strong
-    # event detection.
+    # 某些手动录波没有断路器动作，也没有清晰功率沿；只在启动后的预期事件窗搜索，
+    # 并标记这是回退判断，避免误认为检测到了可靠事件沿。
     if sig is not None:
         block_t, envelope = _block_voltage_envelope(t_rel, sig)
         if block_t.size:

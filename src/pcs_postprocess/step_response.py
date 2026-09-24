@@ -1,4 +1,4 @@
-"""Native-time first-step measurements for table D.1 (P or Q)."""
+"""在原始采样时间轴上计算第一段 P/Q 阶跃响应指标。"""
 from __future__ import annotations
 
 import numpy as np
@@ -10,26 +10,24 @@ METRICS = (("M_p", "超调量", "%", 10.0),
 
 
 def smooth_native(t, y, smooth_ms=20.0):
-    """Centered boxcar with edge padding; never silently fill missing samples."""
+    """用边界延拓的居中滑窗平滑；不默默补齐缺失采样。"""
     t, y = np.asarray(t, float), np.asarray(y, float)
     if t.size < 2:
         return y.copy()
     n = max(1, int(round(smooth_ms / 1000.0 / np.median(np.diff(t)))))
     n = min(n, len(y))
     if n % 2 == 0:
-        n = max(1, n - 1)  # symmetric filter, no half-sample timing shift
+        n = max(1, n - 1)  # 奇数窗关于当前采样点对称，不引入半采样延迟
     return np.convolve(np.pad(y, (n // 2, n // 2), mode="edge"),
                        np.ones(n) / n, mode="valid")
 
 
 def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0):
-    """Measure one interval [start, end), excluding the next command.
+    """测量 [start, end) 内的一段阶跃，排除下一次指令。
 
-    Baseline needs 0.5 s; the tail needs at least 0.1 s. Confirm a stationary
-    mean using half-window mean difference and fitted drift, each <=5% of the
-    measured step. Ripple is retained: Ts independently requires every sample
-    in its remaining observation to lie inside the 5% band for at least a tail
-    window. The end is clipped by the caller to recorded observations.
+    基线至少需要 0.5 s，末段至少需要 0.1 s。比较末段前后半窗均值和拟合漂移，
+    两者均不得超过实测阶跃的 5%。稳定时间还要求剩余观察区间持续落在 5% 带内；
+    平滑不会抹掉用于稳定性判断的纹波。调用方负责把结束时刻限制在录波范围内。
     """
     out = {"values": {key: None for key, *_ in METRICS}, "reasons": {},
            "start_s": float(start_s), "end_s": float(end_s),
@@ -54,8 +52,7 @@ def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0):
     out["tail_window_s"] = [float(end_s - tail_s), float(end_s)]
     if tail_s < .1 or t[0] > start_s - .5 + dt * 1.1 or t[-1] < end_s - dt * 1.1:
         return invalid("insufficient_observation")
-    # Filter each side separately so the next step cannot leak backwards into
-    # the steady tail, nor can the first step leak into the baseline.
+    # 基线与阶跃段分别平滑，避免相邻指令的样本越过边界影响指标。
     pre = (t >= start_s - .5) & (t < start_s)
     event = (t >= start_s) & (t < end_s)
     if np.count_nonzero(pre) < 3 or np.count_nonzero(event) < 3:

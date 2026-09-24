@@ -1,4 +1,4 @@
-"""Validate the public MAT/JSON recording contract."""
+"""校验伙伴提交的 MAT/JSON 录波是否符合公开输入契约。"""
 
 import json
 import math
@@ -32,6 +32,7 @@ def _header_names(header):
 
 
 def validate_case(path: Path, expected_mode: str | None = None) -> dict:
+    """先检查事件元数据，再检查 MAT 列名、长度和时间轴。"""
     meta_path = path.with_name(path.stem + "_meta.json")
     if not meta_path.is_file():
         raise ValueError(f"Missing metadata: {meta_path}")
@@ -53,6 +54,7 @@ def validate_case(path: Path, expected_mode: str | None = None) -> dict:
     match = re.fullmatch(r"case_(\d+)_(.+)", path.stem)
     if not match or int(match.group(1)) != meta["case_index"]:
         raise ValueError(f"{path.name}: filename and case_index disagree")
+    # 各模式的事件字段由处理器 profile 定义，避免校验与计算要求分叉。
     profile = _PROFILES[mode]
     for field in (profile["event1_field"], profile["event1_dur_field"],
                   *MODE_FIELDS[mode]):
@@ -69,6 +71,7 @@ def validate_case(path: Path, expected_mode: str | None = None) -> dict:
     names = _header_names(mat["header"])
     if data.ndim != 2 or data.shape[0] < 2 or data.shape[1] != len(names):
         raise ValueError(f"{path.name}: data must be N x len(header), N >= 2")
+    # 仅强制要求计算该模式所必需的通道；其他通道可作为可选绘图信息。
     required = set(REQUIRED_SIGNALS)
     if mode in FREQUENCY_MODES:
         required.add("f_hz")

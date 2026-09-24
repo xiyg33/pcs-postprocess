@@ -275,7 +275,7 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
         ax.set_ylabel(panel.get("ylabel", ""))
         if panel.get("response_active_axis"):
             values = P_pu_wm if ptype == "P_pu" else sig_wm["Ip_pu"]
-            # Response curves have no PWR setpoints: center on their data range.
+            # 响应曲线没有功率指令参考值，纵轴围绕实测范围布置。
             ax.set_ylim(pwr_power_axis_limits(values, {}, "P"))
             from matplotlib.ticker import MultipleLocator
             ax.yaxis.set_major_locator(MultipleLocator(PWR_POWER_TICK_STEP_PU))
@@ -346,7 +346,7 @@ def _draw_power_current_figure(profile_name, tw, bridged, meta, ev, stem,
         ],
     }
     if profile_name == "freq_reg":
-        # Keep a readable baseline range without clipping larger responses.
+        # 保留可读的基线范围，同时让较大的响应完整显示。
         for index in (3, 4):
             response_profile["fig_panels"][index]["include_ylim"] = (-0.4, 0.4)
     display_signals = dict(bridged, Ip_pu=bridged["Ip_filtered_pu"],

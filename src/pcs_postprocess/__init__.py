@@ -1,3 +1,3 @@
-"""Source-independent PCS recording analysis and plots."""
+"""按统一录波契约计算 PCS 指标并绘图。"""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

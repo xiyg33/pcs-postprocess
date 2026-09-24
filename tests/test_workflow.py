@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scipy.io import loadmat
+from scipy.io import loadmat, savemat
 
 from pcs_postprocess.cli import main
 from pcs_postprocess.contract import validate_case
@@ -52,6 +52,27 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse((out / "figures").exists())
             mat = loadmat(next((out / "processed").glob("*.mat")))
             self.assertGreater(mat["t_s"].size, 0)
+
+    def test_absolute_time_preserves_nonzero_origin(self):
+        with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:
+            base = Path(tmp)
+            raw = base / "raw"
+            path = synthetic.create(raw, "frt", "absolute")
+            mat = loadmat(path)
+            mat["data"][:, 0] += 10.0
+            savemat(path, {"data": mat["data"], "header": mat["header"]})
+            meta_path = path.with_name(path.stem + "_meta.json")
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta["fault_start_s"] += 10.0
+            meta["sim_time_s"] += 10.0
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+            out = base / "out"
+            self.assertEqual(main(["run", "--mode", "frt", "--input", str(raw),
+                                   "--output", str(out), "--config",
+                                   str(ROOT / "examples/project.json"), "--no-fig"]), 0)
+            result = loadmat(next((out / "processed").glob("*.mat")))
+            # 绘图窗口把事件统一移到 1 s；绝对时钟平移后仍应找到该事件。
+            self.assertAlmostEqual(float(result["event1_start_s"].squeeze()), 1.0)
 
     def test_missing_required_metadata_fails(self):
         with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:

@@ -161,8 +161,8 @@ def pwr_fourth_band_entry(t, y, start, end, measured, smooth_ms=20.0):
     return float(tt[entries[3]] - start) if entries.size >= 4 else None
 
 
-def pwr_downsampled_signals(bridged, start=None, end=None):
-    """对 P/Q 做 20 ms 平滑，再映射到 5 ms 的统一时间网格。
+def downsample_scalar_signals(bridged, names, start=None, end=None):
+    """对指定标量做 20 ms 平滑，再映射到 5 ms 的统一时间网格。
 
     原始五点沿检测单独进行。缺失采样和原始时间缺口在降采样网格中保持 NaN，
     不能通过插值伪造测量值。
@@ -191,10 +191,10 @@ def pwr_downsampled_signals(bridged, start=None, end=None):
         for run in np.split(indices, breaks):
             output[run] = smooth_native(t[run], raw[run], 20.0)
 
-    for name in ("P_pu", "Q_pu"):
+    for name in names:
         raw = np.asarray(bridged.get(name, np.full(t.shape, np.nan)), dtype=float).reshape(-1)
         if raw.size != t.size:
-            raise ValueError("PWR signal length differs from time axis: " + name)
+            raise ValueError("Scalar signal length differs from time axis: " + name)
         smoothed = np.full(t.shape, np.nan)
         smooth_runs(raw, np.ones(t.shape, dtype=bool), smoothed)
         for segment in segments:
@@ -204,6 +204,11 @@ def pwr_downsampled_signals(bridged, start=None, end=None):
             reduced[(grid > t[i]) & (grid < t[i + 1])] = np.nan
         result[name] = reduced
     return result
+
+
+def pwr_downsampled_signals(bridged, start=None, end=None):
+    """保留 PWR 指标和绘图共用的 P/Q 处理接口。"""
+    return downsample_scalar_signals(bridged, ("P_pu", "Q_pu"), start, end)
 
 
 def pwr_step_summary(bridged, meta, return_downsampled=False):

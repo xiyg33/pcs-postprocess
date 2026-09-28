@@ -84,4 +84,11 @@ class PathsConfig:
 
 
 def load_paths_config(path: Path | None = None) -> PathsConfig:
-    return PathsConfig.load(path or Path.cwd() / DEFAULT_PATHS_CONFIG)
+    if path is not None:
+        return PathsConfig.load(path)
+    cwd_config = Path.cwd() / DEFAULT_PATHS_CONFIG
+    if cwd_config.is_file():
+        return PathsConfig.load(cwd_config)
+    # editable 安装可从任意当前目录找到仓库内的个人配置。
+    package_config = Path(__file__).resolve().parents[2] / DEFAULT_PATHS_CONFIG
+    return PathsConfig.load(package_config)

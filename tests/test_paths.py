@@ -40,6 +40,8 @@ class PathsTests(unittest.TestCase):
             paths_file = self.make_config(base)
             profile = PathsConfig.load(paths_file).source("hil")
             synthetic.create(profile.input_dir("frt"), "frt")
+            # 目录可能含尚未迁移的其他编号，--case 只校验指定工况。
+            (profile.input_dir("frt") / "case_9999_old.mat").write_bytes(b"legacy")
             common = ["--mode", "frt", "--source", "hil", "--paths-config", str(paths_file)]
             self.assertEqual(main(["validate", *common, "--case", "1000"]), 0)
             self.assertEqual(main(["run", *common, "--case", "1000", "--no-fig"]), 0)

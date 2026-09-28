@@ -5,6 +5,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from .processing import safe_num
+from .plot_common import scalar_plot_data
 
 FIG_SIZE = (12, 9)
 DPI = 150
@@ -15,9 +16,9 @@ def render_case(case, fig_dir):
     stem, meta, ev = case.stem, case.meta, case.events
     data = case.bridged
     tw = data["t_s"]
+    scalar = scalar_plot_data(data, ev)
     Va_pu, Vb_pu, Vc_pu = data["Vabc_pu"].T
     Ia_pu, Ib_pu, Ic_pu = data["Iabc_pu"].T
-    P_pu = data["P_pu"]
 
     # 5. Breaker 信息
     breaker = data.get("breaker")
@@ -54,7 +55,7 @@ def render_case(case, fig_dir):
 
     # ---- Panel 3: 有功功率 ----
     ax = axes[2]
-    ax.plot(tw, P_pu, lw=0.8, color="tab:blue")
+    ax.plot(scalar["t_s"], scalar["P_pu"], lw=0.8, color="tab:blue")
     P_ref = safe_num(meta.get("P_ref_pu"))
     ax.axhline(P_ref, ls="--", color="gray", lw=0.8)
     ax.set_ylabel("P (pu)")

@@ -17,21 +17,21 @@ pcs-postprocess run --mode frt --input examples/generated/frt --output outputs/f
 
 ## 每个人配置自己的默认目录
 
-在使用本仓库的项目根目录创建 `postprocess_paths.local.json`。该文件应加入项目的 `.gitignore`；可参考下面的结构，填写自己的结果目录：
+在本仓库根目录复制 `postprocess_paths.example.json` 为 `postprocess_paths.local.json`，再复制 `postprocess_project.example.json` 为 `postprocess_project.json`。两份实际配置已由 Git 忽略；填写自己的目录和额定值。例如：
 
 ```json
 {
   "project_config": "postprocess_project.json",
   "sources": {
-    "hil": {"results_root": "hil_batch/results_hil", "raw_subdir": "hil_raw", "input_subdir": "canonical", "output_subdir": "postprocess"},
-    "sim": {"results_root": "sim_batch/results_sim", "input_subdir": "canonical", "output_subdir": "postprocess"}
+    "hil": {"results_root": "data/results_hil", "raw_subdir": "hil_raw", "input_subdir": "canonical", "output_subdir": "postprocess"},
+    "sim": {"results_root": "data/results_sim", "input_subdir": "canonical", "output_subdir": "postprocess"}
   }
 }
 ```
 
 相对路径以此配置文件所在目录为准，也可以填写绝对路径。来源名称可自行增加。`results_root` 下每类数据使用 `results_<mode>/`：输入在 `input_subdir`，分析结果在 `output_subdir`。`project_config` 指向额定值配置，`raw_subdir` 供来源适配器定位原始文件；公开包只读取标准输入。三个子目录名均可省略，默认依次为 `canonical`、`postprocess`、`hil_raw`。
 
-在配置文件所在目录运行：
+从当前目录或父项目目录运行均可：命令先查找当前目录的个人配置，再查找 editable 安装所在项目的配置。安装为普通 wheel 时，可用 `--paths-config` 显式指定配置。
 
 ```powershell
 pcs-postprocess validate --mode frt --source hil --case 1001
@@ -40,6 +40,8 @@ pcs-postprocess run --mode frt --source sim --case 1097
 ```
 
 也可使用 `--paths-config <文件>` 指定其他位置的个人配置。`--input`、`--output`、`--config` 可以分别覆盖配置中的路径。没有个人配置时，原有显式路径命令继续可用；`--source` 指定了未配置的来源时会报错。
+
+图中的 P/Q、正序电压、频率、Ip/Iq 等标量曲线使用 20 ms 平滑和 5 ms 采样；三相瞬时波形保留原始采样。此处理只改变绘图，汇总指标和处理后 MAT 仍依据原始数据。PWR 的 P/Q 指标继续使用原有的同参数降采样数据。
 
 | 输出位置 | 内容 |
 |---|---|

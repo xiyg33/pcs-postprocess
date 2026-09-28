@@ -7,7 +7,20 @@ import matplotlib
 matplotlib.use("Agg")
 import numpy as np
 
-from .processing import safe_num, supports_power_current
+from .processing import downsample_scalar_signals, safe_num, supports_power_current
+
+
+SCALAR_PLOT_NAMES = ("Vp_pu", "P_pu", "Q_pu", "f_hz", "Ip_pu", "Iq_pu")
+
+
+def scalar_plot_data(bridged, events):
+    """仅为画图准备标量曲线；指标始终读取未修改的 bridged 数据。"""
+    signals = dict(bridged)
+    signals.setdefault("Q_pu", np.full_like(np.asarray(bridged["t_s"]), np.nan))
+    names = tuple(name for name in SCALAR_PLOT_NAMES if name in signals)
+    return downsample_scalar_signals(signals, names,
+                                     events.get("event1_start"),
+                                     events.get("event1_end"))
 
 
 def draw_processed_case(case, fig_dir, include_power_current=False):
@@ -19,9 +32,7 @@ def draw_processed_case(case, fig_dir, include_power_current=False):
             "type": "P_pu", "ylabel": "P (pu)", "xlabel": True,
             "ref_lines": [{"field": "P_ref_pu"}],
         }
-    _draw_figure(profile, data["t_s"], data, case.meta, data["P_pu"],
-                 data.get("Q_pu", np.full_like(data["t_s"], np.nan)),
-                 data["Vp_pu"], data.get("f_hz"), case.events, case.stem,
+    _draw_figure(profile, data["t_s"], data, case.meta, case.events, case.stem,
                  data["rec_offset_s"], case.summary["pre_event_ok"], fig_dir)
     if include_power_current:
         _draw_power_current_figure(case.profile_name, data["t_s"], data,
@@ -205,8 +216,8 @@ def pwr_power_axis_limits(signal_pu, meta, channel):
     return center - half_span, center + half_span
 
 
-def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
-                 ev, stem, offset, pre_event_ok, fig_dir, suffix=""):
+def _draw_figure(prof, tw, sig_wm, meta, ev, stem, offset, pre_event_ok,
+                 fig_dir, suffix=""):
     """根据 profile 的 fig_panels 配置绘制多子图。
 
     每个 panel 的 type 决定绘制哪种信号及其样式。
@@ -219,6 +230,8 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
     if nrows == 1 and ncols == 1:
         axes = [axes]
     axes = np.atleast_1d(axes).flatten()
+    display = scalar_plot_data(sig_wm, ev)
+    display_t = display["t_s"]
 
     for i, panel in enumerate(prof["fig_panels"]):
         ax = axes[i]
@@ -226,7 +239,7 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
 
         # ---- 绘制信号 ----
         if ptype == "Vp":
-            ax.plot(tw, Vp_pu_wm, lw=0.8, color="tab:green")
+            ax.plot(display_t, display["Vp_pu"], lw=0.8, color="tab:green")
         elif ptype == "Vabc_pu":
             colors = ["tab:blue", "tab:orange", "tab:green"]
             for j, lab in enumerate(["Va", "Vb", "Vc"]):
@@ -240,12 +253,12 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
             if panel.get("legend"):
                 ax.legend(loc="upper right", fontsize=8, ncol=3)
         elif ptype == "P_pu":
-            ax.plot(tw, P_pu_wm, lw=0.8, color="tab:blue")
+            ax.plot(display_t, display["P_pu"], lw=0.8, color="tab:blue")
         elif ptype == "Q_pu":
-            ax.plot(tw, Q_pu_wm, lw=0.8, color="tab:orange")
+            ax.plot(display_t, display["Q_pu"], lw=0.8, color="tab:orange")
         elif ptype in ("Ip_pu", "Iq_pu"):
             color = "tab:blue" if ptype == "Ip_pu" else "tab:orange"
-            ax.plot(tw, sig_wm[ptype], lw=0.8, color=color)
+            ax.plot(display_t, display[ptype], lw=0.8, color=color)
             invalid = ~sig_wm["current_valid"].astype(bool)
             if invalid.any():
                 ax.fill_between(tw, 0, 1, where=invalid, step="mid",
@@ -253,8 +266,8 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
                 ax.text(0.01, 0.04, "Invalid direction: |V| < 0.05 pu or non-finite input",
                         transform=ax.transAxes, fontsize=8, color="gray")
         elif ptype == "f":
-            if f_sig_wm is not None:
-                ax.plot(tw, f_sig_wm, lw=0.8, color="tab:red")
+            if "f_hz" in display:
+                ax.plot(display_t, display["f_hz"], lw=0.8, color="tab:red")
             else:
                 ax.text(0.5, 0.5, "f signal unavailable", transform=ax.transAxes,
                         ha="center", va="center", fontsize=10, color="gray")
@@ -274,13 +287,13 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
         # ---- 标签 ----
         ax.set_ylabel(panel.get("ylabel", ""))
         if panel.get("response_active_axis"):
-            values = P_pu_wm if ptype == "P_pu" else sig_wm["Ip_pu"]
+            values = display["P_pu"] if ptype == "P_pu" else display["Ip_pu"]
             # 响应曲线没有功率指令参考值，纵轴围绕实测范围布置。
             ax.set_ylim(pwr_power_axis_limits(values, {}, "P"))
             from matplotlib.ticker import MultipleLocator
             ax.yaxis.set_major_locator(MultipleLocator(PWR_POWER_TICK_STEP_PU))
         elif panel.get("power_axis"):
-            power_signal = P_pu_wm if panel["power_axis"] == "P" else Q_pu_wm
+            power_signal = display["P_pu"] if panel["power_axis"] == "P" else display["Q_pu"]
             ax.set_ylim(pwr_power_axis_limits(power_signal, meta, panel["power_axis"]))
             from matplotlib.ticker import MultipleLocator
             ax.yaxis.set_major_locator(MultipleLocator(PWR_POWER_TICK_STEP_PU))
@@ -300,7 +313,7 @@ def _draw_figure(prof, tw, sig_wm, meta, P_pu_wm, Q_pu_wm, Vp_pu_wm, f_sig_wm,
         if (ptype == "f" and ev.get("profile_name") == "freq_reg"
                 and supports_power_current(meta, "freq_reg")):
             from matplotlib.ticker import MultipleLocator
-            ax.set_ylim(freq_reg_display_limits(f_sig_wm))
+            ax.set_ylim(freq_reg_display_limits(display["f_hz"]))
             ax.yaxis.set_major_locator(MultipleLocator(FREQ_REG_DISPLAY_TICK_HZ))
         if panel.get("xlabel"):
             ax.set_xlabel("sim time (s)")
@@ -349,9 +362,6 @@ def _draw_power_current_figure(profile_name, tw, bridged, meta, ev, stem,
         # 保留可读的基线范围，同时让较大的响应完整显示。
         for index in (3, 4):
             response_profile["fig_panels"][index]["include_ylim"] = (-0.4, 0.4)
-    display_signals = dict(bridged, Ip_pu=bridged["Ip_filtered_pu"],
-                           Iq_pu=bridged["Iq_filtered_pu"])
-    _draw_figure(response_profile, tw, display_signals, meta, bridged["P_pu"],
-                 bridged.get("Q_pu", np.full_like(tw, np.nan)), bridged["Vp_pu"],
-                 bridged.get("f_hz"), ev, stem, offset, pre_event_ok, fig_dir,
+    _draw_figure(response_profile, tw, bridged, meta, ev, stem,
+                 offset, pre_event_ok, fig_dir,
                  suffix="_power_current")

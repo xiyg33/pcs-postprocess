@@ -8,5 +8,7 @@ dist/
 outputs/
 examples/generated/
 results_*/
+postprocess_paths.local.json
+postprocess_project.json
 *.slx
 *.slxc

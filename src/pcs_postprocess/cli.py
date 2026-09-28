@@ -4,6 +4,7 @@ import argparse
 import importlib
 import json
 from pathlib import Path
+import re
 
 from . import processing
 from .config import ProjectConfig
@@ -29,6 +30,10 @@ def _cases(input_dir: Path, mode: str, filter_ids: set[int] | None):
     cases = []
     ids = set()
     for path in sorted(input_dir.glob("case_*.mat")):
+        # 单例模式先按文件名编号筛选，目录内其他旧文件不影响指定用例。
+        match = re.match(r"^case_(\d+)(?:_|$)", path.stem)
+        if filter_ids is not None and (match is None or int(match.group(1)) not in filter_ids):
+            continue
         meta = validate_case(path, mode)
         case_id = meta["case_index"]
         if filter_ids is not None and case_id not in filter_ids:
@@ -89,7 +94,7 @@ def main(argv=None) -> int:
         command.add_argument("--mode", required=True, choices=MODES)
         command.add_argument("--source", help="配置中的数据来源名称，例如 hil 或 sim")
         command.add_argument("--paths-config", type=Path,
-                             help="个人目录配置；默认读取当前目录的 postprocess_paths.local.json")
+                             help="个人目录配置；默认查找当前目录和包项目目录")
         command.add_argument("--input", type=Path)
         command.add_argument("--case")
         if name == "run":

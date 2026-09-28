@@ -13,7 +13,7 @@ from .processing import safe_num, is_freq_reg_deadband, supports_power_current
 from .plot_common import (
     _draw_power_current_figure, pwr_power_axis_limits,
     PWR_POWER_TICK_STEP_PU, freq_reg_display_limits,
-    FREQ_REG_DISPLAY_TICK_HZ,
+    FREQ_REG_DISPLAY_TICK_HZ, scalar_plot_data,
 )
 
 FIG_SIZE = (12, 9)
@@ -27,12 +27,11 @@ def render_case(case, fig_dir):
     stem, meta, ev = case.stem, case.meta, case.events
     data = case.bridged
     tw = data["t_s"]
+    scalar = scalar_plot_data(data, ev)
+    scalar_t = scalar["t_s"]
     Va_pu, Vb_pu, Vc_pu = data["Vabc_pu"].T
     Ia_pu, Ib_pu, Ic_pu = data["Iabc_pu"].T
-    P_pu = data["P_pu"]
-    Q_pu = data.get("Q_pu")
     f_wm = data.get("f_hz")
-    Vp_pu_wm = data["Vp_pu"]
     dev = safe_num(meta.get("freq_deviation_hz"))
     rate = safe_num(meta.get("freq_ramp_rate_hz_per_s"))
     ramp_dur = abs(dev / rate) if abs(rate) > 1e-12 else 0.0
@@ -42,7 +41,7 @@ def render_case(case, fig_dir):
     # ---- Panel 1: 频率 ----
     ax = axes[0]
     if f_wm is not None:
-        ax.plot(tw, f_wm, lw=0.8, color="tab:red")
+        ax.plot(scalar_t, scalar["f_hz"], lw=0.8, color="tab:red")
     else:
         ax.text(
             0.5, 0.5, "f signal unavailable",

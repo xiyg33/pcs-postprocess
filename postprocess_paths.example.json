@@ -1,0 +1,16 @@
+{
+  "project_config": "postprocess_project.json",
+  "sources": {
+    "hil": {
+      "results_root": "data/results_hil",
+      "raw_subdir": "hil_raw",
+      "input_subdir": "canonical",
+      "output_subdir": "postprocess"
+    },
+    "sim": {
+      "results_root": "data/results_sim",
+      "input_subdir": "canonical",
+      "output_subdir": "postprocess"
+    }
+  }
+}

@@ -41,11 +41,11 @@ pcs-postprocess run --mode frt --source sim --case 1097
 
 也可使用 `--paths-config <文件>` 指定其他位置的个人配置。`--input`、`--output`、`--config` 可以分别覆盖配置中的路径。没有个人配置时，原有显式路径命令继续可用；`--source` 指定了未配置的来源时会报错。
 
-图中的 P/Q、正序电压、频率、Ip/Iq 等标量曲线使用 20 ms 平滑和 5 ms 采样；三相瞬时波形保留原始采样。此处理只改变绘图，汇总指标和处理后 MAT 仍依据原始数据。PWR 的 P/Q 指标继续使用原有的同参数降采样数据。
+图中的 P/Q、正序电压、频率、Ip/Iq 等标量曲线使用 20 ms 平滑和 5 ms 采样；三相瞬时波形保留原始采样。此处理只改变绘图，汇总指标仍依据原始数据。PWR 的 P/Q 指标继续使用原有的同参数降采样数据。默认不保存对时、裁剪后的额外 MAT；需要检查中间数组时为 `run` 加 `--save-processed`。
 
 | 输出位置 | 内容 |
 |---|---|
-| `outputs/frt/processed/` | 对时、裁剪后的 MAT |
+| `outputs/frt/processed/` | 对时、裁剪后的 MAT；仅 `--save-processed` 时写入 |
 | `outputs/frt/figures/` | PNG 曲线；使用 `--no-fig` 时不生成 |
 | `outputs/frt/summary_frt.csv` | 每例一行的汇总指标 |
 | `outputs/pwr/downsampled/` | PWR 指标计算所用的降采样 P/Q CSV |
@@ -68,6 +68,8 @@ foreach ($mode in $modes) {
 pcs-postprocess run --mode frt --input examples/generated/frt --output outputs/one-frt --config examples/project.json --case 1000
 pcs-postprocess run --mode pwr --input examples/generated/pwr --output outputs/pwr-metrics --config examples/project.json --case 1001 --no-fig
 ```
+
+绝对仿真时间输入允许不同文件名共用 `case_index`；两份文件分别绘图，并在汇总中保留两行。录波时间输入仍要求编号唯一，以免事件沿对时混淆。
 
 ## 接入自己的录波
 

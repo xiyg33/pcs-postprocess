@@ -28,7 +28,7 @@ def _cases(input_dir: Path, mode: str, filter_ids: set[int] | None):
     if not input_dir.is_dir():
         raise ValueError(f"Input directory does not exist: {input_dir}")
     cases = []
-    ids = set()
+    ids = {}
     for path in sorted(input_dir.glob("case_*.mat")):
         # 单例模式先按文件名编号筛选，目录内其他旧文件不影响指定用例。
         match = re.match(r"^case_(\d+)(?:_|$)", path.stem)
@@ -38,9 +38,11 @@ def _cases(input_dir: Path, mode: str, filter_ids: set[int] | None):
         case_id = meta["case_index"]
         if filter_ids is not None and case_id not in filter_ids:
             continue
-        if case_id in ids:
-            raise ValueError(f"Duplicate case_index {case_id} in {input_dir}")
-        ids.add(case_id)
+        if case_id in ids and (meta["time_basis"] != "absolute"
+                               or ids[case_id] != "absolute"):
+            raise ValueError(f"Duplicate recorded case_index {case_id} in {input_dir}")
+        # 绝对时间 SIM 不需要按编号求录波偏移；允许同编号、不同名称的原始工况。
+        ids[case_id] = meta["time_basis"]
         cases.append((case_id, str(path), meta))
     if not cases:
         raise ValueError(f"No matching case_*.mat files in {input_dir}")
@@ -48,7 +50,8 @@ def _cases(input_dir: Path, mode: str, filter_ids: set[int] | None):
 
 
 def run(mode: str, input_dir: Path, output_dir: Path, config_path: Path,
-        filter_ids: set[int] | None = None, no_fig: bool = False) -> int:
+        filter_ids: set[int] | None = None, no_fig: bool = False,
+        save_processed: bool = False) -> int:
     config = ProjectConfig.load(config_path)
     cases = _cases(input_dir, mode, filter_ids)
     processing.configure_project(config)
@@ -70,7 +73,9 @@ def run(mode: str, input_dir: Path, output_dir: Path, config_path: Path,
     for ci, path, meta in cases:
         offset, source = offsets[ci]
         case = processing.prepare_case(path, meta, offset, source)
-        processing.save_bridged(case, str(output_dir / "processed"))
+        # 处理数据供当前运行的指标和绘图使用；仅明确要求时写入额外 MAT。
+        if save_processed:
+            processing.save_bridged(case, str(output_dir / "processed"))
         if mode == "pwr":
             processing.save_pwr_downsampled(case, str(output_dir / "downsampled"))
         if renderer:
@@ -101,6 +106,8 @@ def main(argv=None) -> int:
             command.add_argument("--output", type=Path)
             command.add_argument("--config", type=Path)
             command.add_argument("--no-fig", action="store_true")
+            command.add_argument("--save-processed", action="store_true",
+                                 help="额外保存对时、裁剪后的 MAT；默认不写入")
     args = parser.parse_args(argv)
     try:
         filter_ids = _case_filter(args.case)
@@ -123,7 +130,7 @@ def main(argv=None) -> int:
         if output_dir is None or config_path is None:
             raise ValueError("Specify --output and --config, or use --source")
         return run(args.mode, input_dir, output_dir, config_path,
-                   filter_ids, args.no_fig)
+                   filter_ids, args.no_fig, args.save_processed)
     except (ValueError, KeyError, OSError) as exc:
         parser.exit(2, f"error: {exc}\n")
 

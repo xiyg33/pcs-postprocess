@@ -2,6 +2,7 @@ import csv
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -19,7 +20,7 @@ spec.loader.exec_module(synthetic)
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_all_modes_produce_processed_data_and_figures(self):
+    def test_all_modes_produce_figures_without_extra_mat(self):
         with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:
             base = Path(tmp)
             for mode in synthetic.MODES:
@@ -31,7 +32,7 @@ class WorkflowTests(unittest.TestCase):
                     self.assertEqual(main(["run", "--mode", mode, "--input", str(raw),
                                            "--output", str(out), "--config",
                                            str(ROOT / "examples/project.json")]), 0)
-                    self.assertEqual(len(list((out / "processed").glob("*.mat"))), 1)
+                    self.assertFalse((out / "processed").exists())
                     self.assertEqual(len(list((out / "figures").glob("*.png"))),
                                      2 if mode in ("frt", "freq_reg", "inertia") else 1)
                     with (out / f"summary_{mode}.csv").open(encoding="utf-8-sig") as file:
@@ -48,7 +49,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(main(["run", "--mode", "frt", "--input", str(raw),
                                    "--output", str(out), "--config",
                                    str(ROOT / "examples/project.json"), "--case", "1000",
-                                   "--no-fig"]), 0)
+                                   "--no-fig", "--save-processed"]), 0)
             self.assertFalse((out / "figures").exists())
             mat = loadmat(next((out / "processed").glob("*.mat")))
             self.assertGreater(mat["t_s"].size, 0)
@@ -69,7 +70,8 @@ class WorkflowTests(unittest.TestCase):
             out = base / "out"
             self.assertEqual(main(["run", "--mode", "frt", "--input", str(raw),
                                    "--output", str(out), "--config",
-                                   str(ROOT / "examples/project.json"), "--no-fig"]), 0)
+                                   str(ROOT / "examples/project.json"), "--no-fig",
+                                   "--save-processed"]), 0)
             result = loadmat(next((out / "processed").glob("*.mat")))
             # 绘图窗口把事件统一移到 1 s；绝对时钟平移后仍应找到该事件。
             self.assertAlmostEqual(float(result["event1_start_s"].squeeze()), 1.0)
@@ -83,6 +85,25 @@ class WorkflowTests(unittest.TestCase):
             meta_path.write_text(json.dumps(meta), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "fault_start_s"):
                 validate_case(path)
+
+    def test_absolute_cases_can_share_index_when_names_differ(self):
+        with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:
+            base = Path(tmp)
+            raw = base / "raw"
+            first = synthetic.create(raw, "scr", "absolute")
+            second = first.with_name(first.stem + "_variant.mat")
+            shutil.copyfile(first, second)
+            first_meta = json.loads(first.with_name(first.stem + "_meta.json").read_text(encoding="utf-8"))
+            first_meta["case_name"] += "_variant"
+            second.with_name(second.stem + "_meta.json").write_text(
+                json.dumps(first_meta), encoding="utf-8")
+            out = base / "out"
+            self.assertEqual(main(["run", "--mode", "scr", "--input", str(raw),
+                                   "--output", str(out), "--config",
+                                   str(ROOT / "examples/project.json")]), 0)
+            self.assertEqual(len(list((out / "figures").glob("*.png"))), 2)
+            with (out / "summary_scr.csv").open(encoding="utf-8-sig") as file:
+                self.assertEqual(len(list(csv.DictReader(file))), 2)
 
     def test_csv_adapter(self):
         with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:

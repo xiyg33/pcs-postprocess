@@ -8,6 +8,7 @@ from pathlib import Path
 from . import processing
 from .config import ProjectConfig
 from .contract import validate_case
+from .paths import load_paths_config
 
 MODES = tuple(processing.TEST_MODE_CONFIG)
 
@@ -86,20 +87,37 @@ def main(argv=None) -> int:
     for name in ("validate", "run"):
         command = commands.add_parser(name)
         command.add_argument("--mode", required=True, choices=MODES)
-        command.add_argument("--input", required=True, type=Path)
+        command.add_argument("--source", help="配置中的数据来源名称，例如 hil 或 sim")
+        command.add_argument("--paths-config", type=Path,
+                             help="个人目录配置；默认读取当前目录的 postprocess_paths.local.json")
+        command.add_argument("--input", type=Path)
         command.add_argument("--case")
         if name == "run":
-            command.add_argument("--output", required=True, type=Path)
-            command.add_argument("--config", required=True, type=Path)
+            command.add_argument("--output", type=Path)
+            command.add_argument("--config", type=Path)
             command.add_argument("--no-fig", action="store_true")
     args = parser.parse_args(argv)
     try:
         filter_ids = _case_filter(args.case)
+        # 显式参数优先；只有缺少目录或额定值路径时才读取来源配置。
+        paths = None
+        if args.source is not None:
+            paths = load_paths_config(args.paths_config)
+            source_paths = paths.source(args.source)
+        elif args.paths_config is not None:
+            raise ValueError("--paths-config requires --source")
+        input_dir = args.input or (source_paths.input_dir(args.mode) if paths else None)
+        if input_dir is None:
+            raise ValueError("Specify --input or --source")
         if args.command == "validate":
-            cases = _cases(args.input, args.mode, filter_ids)
+            cases = _cases(input_dir, args.mode, filter_ids)
             print(json.dumps({"mode": args.mode, "valid_cases": len(cases)}))
             return 0
-        return run(args.mode, args.input, args.output, args.config,
+        output_dir = args.output or (source_paths.output_dir(args.mode) if paths else None)
+        config_path = args.config or (paths.project_config if paths else None)
+        if output_dir is None or config_path is None:
+            raise ValueError("Specify --output and --config, or use --source")
+        return run(args.mode, input_dir, output_dir, config_path,
                    filter_ids, args.no_fig)
     except (ValueError, KeyError, OSError) as exc:
         parser.exit(2, f"error: {exc}\n")

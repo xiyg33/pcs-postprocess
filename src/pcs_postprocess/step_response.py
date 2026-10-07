@@ -22,7 +22,7 @@ def smooth_native(t, y, smooth_ms=20.0):
                        np.ones(n) / n, mode="valid")
 
 
-def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0):
+def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0, tail_window_s=None):
     """测量 [start, end) 内的一段阶跃，排除下一次指令。
 
     基线至少需要 0.5 s，末段至少需要 0.1 s。比较末段前后半窗均值和拟合漂移，
@@ -48,7 +48,7 @@ def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0):
     if not np.isfinite(command_delta) or abs(command_delta) < 1e-6:
         return invalid("zero_command_step")
     dt = float(np.median(np.diff(t)))
-    tail_s = min(.5, (end_s - start_s) * .2)
+    tail_s = min(.5, (end_s - start_s) * .2) if tail_window_s is None else float(tail_window_s)
     out["tail_window_s"] = [float(end_s - tail_s), float(end_s)]
     if tail_s < .1 or t[0] > start_s - .5 + dt * 1.1 or t[-1] < end_s - dt * 1.1:
         return invalid("insufficient_observation")

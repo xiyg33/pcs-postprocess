@@ -45,14 +45,26 @@ class PathsTests(unittest.TestCase):
             common = ["--mode", "frt", "--source", "hil", "--paths-config", str(paths_file)]
             self.assertEqual(main(["validate", *common, "--case", "1000"]), 0)
             self.assertEqual(main(["run", *common, "--case", "1000", "--no-fig"]), 0)
-            self.assertTrue((profile.output_dir("frt") / "summary_frt.csv").is_file())
+            self.assertTrue((profile.output_dir("frt") / "hil_summary_frt.csv").is_file())
+            self.assertFalse((profile.output_dir("frt") / "summary_frt.csv").exists())
             override_input = base / "other_input"
             synthetic.create(override_input, "frt")
             override_output = base / "other_output"
             self.assertEqual(main(["run", *common, "--input", str(override_input),
                                    "--output", str(override_output), "--config",
                                    str(ROOT / "examples/project.json"), "--no-fig"]), 0)
-            self.assertTrue((override_output / "summary_frt.csv").is_file())
+            self.assertTrue((override_output / "hil_summary_frt.csv").is_file())
+
+    def test_sim_source_summary_name(self):
+        with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:
+            base = Path(tmp)
+            paths_file = self.make_config(base)
+            profile = PathsConfig.load(paths_file).source("sim")
+            synthetic.create(profile.input_dir("pwr"), "pwr")
+            self.assertEqual(main(["run", "--mode", "pwr", "--source", "sim",
+                                   "--paths-config", str(paths_file), "--no-fig"]), 0)
+            self.assertTrue((profile.output_dir("pwr") / "sim_summary_pwr.csv").is_file())
+            self.assertFalse((profile.output_dir("pwr") / "summary_pwr.csv").exists())
 
     def test_missing_config_and_unknown_source_fail(self):
         with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:

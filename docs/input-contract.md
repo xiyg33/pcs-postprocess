@@ -23,7 +23,7 @@
 JSON 必须包含 `mode`、非负整数 `case_index`、非空 `case_name` 和 `time_basis`。文件名中的编号必须与 `case_index` 一致。
 
 - `"time_basis": "recorded"`：`t_s` 是录波器的相对时间。处理器根据实测事件沿对齐元数据中的事件时间；若无法可靠检测，可使用项目配置中的 `record_start_nominal_s` 回退。
-- `"time_basis": "absolute"`：`t_s` 与事件元数据使用同一仿真时钟。处理器直接使用原始时间轴，不做事件沿修正；首个采样点可以不是零。
+- `"time_basis": "absolute"`：`t_s` 与事件元数据使用同一仿真时钟，首个采样点可以不是零。原始时间轴不平移；inertia 和 volt_prot 仍检测实测扰动起点，仅将显示时间归一化到 1 s。
 
 `record_pre_s`、`record_post_s` 和 `sim_time_s` 是可选的观察窗口信息。每类测试还需要下列数值事件字段：
 
@@ -49,3 +49,13 @@ pcs-postprocess run --mode frt --input examples/generated/frt --output outputs/f
 ```
 
 `validate` 检查输入文件；`run` 才生成处理后 MAT、PNG 和 `summary_<mode>.csv`。完整的合成输入可由 `python examples/make_synthetic.py` 生成。
+
+## inertia 与 volt_prot 的指标时间轴
+
+`inertia_event_start_input_s`、`inertia_metric_end_input_s` 和
+`protection_event_start_input_s`、`protection_trip_input_s` 使用输入时间轴：
+recorded 是从首样本计时的录波相对秒数，absolute 是原始仿真秒数。
+绘图时统一按 `t_normalized = t_input - t_event_input + 1` 转换。
+volt_prot 的 `t1_s=1` 只在实测电压沿已确认时成立；`t2_s` 使用同一变换，
+`delta_t_s=t2_s-t1_s`。未确认沿时，名义时间仅用于展示，不产生 Δt。
+`breaker` 保持可选，但缺失会明确标记 `missing_breaker`，不能视为正常未跳闸。

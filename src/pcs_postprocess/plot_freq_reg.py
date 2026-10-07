@@ -89,10 +89,15 @@ def render_case(case, fig_dir):
     cn = str(meta.get("case_name", stem))
     P_ref = safe_num(meta.get("P_ref_pu"))
     df = safe_num(meta.get("freq_deviation_hz"))
-    fig.suptitle(
+    title_note = "\n频率对时待人工确认：当前使用单例名义起点" if case.summary.get("freq_timing_review_required") else ""
+    if title_note:
+        ev = dict(ev, plot_title=f"Case {ci}: {cn}{title_note}")
+    suptitle = fig.suptitle(
         "Case %04d: %s  P=%.2f pu  $\\Delta$f=%+.3f Hz" % (ci, cn, P_ref, df),
         fontsize=11,
     )
+    if title_note:
+        suptitle.set_text(suptitle.get_text() + title_note)
 
     fig.tight_layout()
     out_path = os.path.join(fig_dir, stem + ".png")

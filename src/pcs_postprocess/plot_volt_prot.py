@@ -62,7 +62,7 @@ def render_case(case, fig_dir):
                 transform=ax.transAxes, ha="center", va="center",
                 fontsize=10, color="gray")
     ax.set_ylabel("Q (pu)")
-    ax.set_xlabel("sim time (s)")
+    ax.set_xlabel("normalized time (s)")
 
     for ax in axes:
         ax.axvline(ev["event1_start"], color="red", ls="--", lw=0.8, alpha=0.5)
@@ -78,10 +78,9 @@ def render_case(case, fig_dir):
 
     if not np.isnan(delta_t):
         suptitle = "Case %04d: %s  V_target=%.2f pu  Δt=%.4f s" % (ci, cn, vt, delta_t)
-    elif np.isnan(t2):
-        suptitle = "Case %04d: %s  V_target=%.2f pu  Δt=N/A (no_trip)" % (ci, cn, vt)
     else:
-        suptitle = "Case %04d: %s  V_target=%.2f pu  Δt=N/A (detection_error)" % (ci, cn, vt)
+        status = case.summary.get("protection_status", "detection_error")
+        suptitle = "Case %04d: %s  V_target=%.2f pu  Δt=N/A (%s)" % (ci, cn, vt, status)
 
     fig.suptitle(suptitle, fontsize=11)
     fig.tight_layout()

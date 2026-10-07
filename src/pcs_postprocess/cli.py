@@ -14,6 +14,18 @@ from .paths import load_paths_config
 MODES = tuple(processing.TEST_MODE_CONFIG)
 
 
+def _is_summary_only_case(mode: str, meta: dict) -> bool:
+    """Keep boundary/deadband metrics while omitting their default figures."""
+    if mode == "freq_reg":
+        return processing.is_freq_reg_deadband(meta)
+    if mode == "frt":
+        test_type = str(meta.get("test_type") or "").strip().upper()
+        case_name = str(meta.get("case_name") or "").strip().upper()
+        return (test_type in ("LVRT_BND", "HVRT_BND")
+                or case_name.startswith(("LVRT_BND_", "HVRT_BND_")))
+    return False
+
+
 def _case_filter(value: str | None) -> set[int] | None:
     if value is None:
         return None
@@ -51,7 +63,8 @@ def _cases(input_dir: Path, mode: str, filter_ids: set[int] | None):
 
 def run(mode: str, input_dir: Path, output_dir: Path, config_path: Path,
         filter_ids: set[int] | None = None, no_fig: bool = False,
-        save_processed: bool = False) -> int:
+        save_processed: bool = False, source: str | None = None,
+        include_summary_only_figures: bool = False) -> int:
     config = ProjectConfig.load(config_path)
     cases = _cases(input_dir, mode, filter_ids)
     processing.configure_project(config)
@@ -71,21 +84,31 @@ def run(mode: str, input_dir: Path, output_dir: Path, config_path: Path,
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for ci, path, meta in cases:
-        offset, source = offsets[ci]
-        case = processing.prepare_case(path, meta, offset, source)
+        offset, offset_source = offsets[ci]
+        case = processing.prepare_case(path, meta, offset, offset_source)
+        if mode == "freq_reg" and case.summary.get("freq_timing_review_required") and not no_fig:
+            from . import freq_reg_timing
+            review_path = output_dir / "timing_review" / (case.stem + "_timing_review.png")
+            review_t, review_sig = processing.load_case_file(path, absolute=meta["time_basis"] == "absolute")
+            freq_reg_timing.render_review(review_t, review_sig, meta, case.meta["_freq_reg_timing"], review_path)
+            case.summary["freq_timing_review_figure"] = str(review_path.resolve())
         # 处理数据供当前运行的指标和绘图使用；仅明确要求时写入额外 MAT。
         if save_processed:
             processing.save_bridged(case, str(output_dir / "processed"))
         if mode == "pwr":
             processing.save_pwr_downsampled(case, str(output_dir / "downsampled"))
-        if renderer:
+        draw_figures = renderer is not None and (
+            include_summary_only_figures or not _is_summary_only_case(mode, meta))
+        if draw_figures:
             figures = output_dir / "figures"
             figures.mkdir(exist_ok=True)
             renderer.render_case(case, str(figures))
         rows.append(case.summary)
-        print(f"case {ci}: processed")
+        status = "processed with figures" if draw_figures else "processed, summary only"
+        print(f"case {ci}: {status}")
     rows.sort(key=lambda row: int(row["case_index"]))
-    summary = output_dir / f"summary_{mode}.csv"
+    prefix = f"{source}_" if source in ("sim", "hil") else ""
+    summary = output_dir / f"{prefix}summary_{mode}.csv"
     processing.write_summary_csv(rows, str(summary), mode)
     print(f"summary: {summary}")
     return 0
@@ -94,6 +117,9 @@ def run(mode: str, input_dir: Path, output_dir: Path, config_path: Path,
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="pcs-postprocess")
     commands = parser.add_subparsers(dest="command", required=True)
+    from . import compare
+    compare_parser = commands.add_parser("compare", help="SIM/HIL 叠加图及报告指标表（PWR/FRT/FREQ_REG/INERTIA/VOLT_PROT）")
+    compare.add_arguments(compare_parser)
     for name in ("validate", "run"):
         command = commands.add_parser(name)
         command.add_argument("--mode", required=True, choices=MODES)
@@ -105,10 +131,15 @@ def main(argv=None) -> int:
         if name == "run":
             command.add_argument("--output", type=Path)
             command.add_argument("--config", type=Path)
-            command.add_argument("--no-fig", action="store_true")
+            command.add_argument("--no-fig", action="store_true",
+                                 help="禁止所有绘图，优先于 --include-summary-only-figures")
+            command.add_argument("--include-summary-only-figures", action="store_true",
+                                 help="绘制默认仅汇总的调频死区及 FRT BND 案例；--case 不自动启用")
             command.add_argument("--save-processed", action="store_true",
                                  help="额外保存对时、裁剪后的 MAT；默认不写入")
     args = parser.parse_args(argv)
+    if args.command == "compare":
+        return compare.execute(args, compare_parser)
     try:
         filter_ids = _case_filter(args.case)
         # 显式参数优先；只有缺少目录或额定值路径时才读取来源配置。
@@ -130,7 +161,8 @@ def main(argv=None) -> int:
         if output_dir is None or config_path is None:
             raise ValueError("Specify --output and --config, or use --source")
         return run(args.mode, input_dir, output_dir, config_path,
-                   filter_ids, args.no_fig, args.save_processed)
+                   filter_ids, args.no_fig, args.save_processed, args.source,
+                   args.include_summary_only_figures)
     except (ValueError, KeyError, OSError) as exc:
         parser.exit(2, f"error: {exc}\n")
 

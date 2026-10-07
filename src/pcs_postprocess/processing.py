@@ -59,13 +59,14 @@ PWR_STEP_REASON_TEXT = {
 }
 
 
-def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
+def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0, max_search_s=None):
     """从预期事件后的五点连续越限估计功率响应沿。
 
     这是指标汇总的回退估计。五点越限后还必须出现持续同向响应；
     检测出的时间是响应沿，不能当作指令下发时间。
     """
     from .step_response import smooth_native
+    search_s = EDGE_MAX_DEV_S if max_search_s is None else float(max_search_s)
 
     t = np.asarray(t, dtype=float).reshape(-1)
     y = np.asarray(y, dtype=float).reshape(-1)
@@ -75,7 +76,7 @@ def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
         return None, "five_point_invalid_input"
     dt = float(np.median(np.diff(t)))
     baseline = (t >= expected_s - .5) & (t < expected_s - .05)
-    search = np.flatnonzero((t >= expected_s) & (t <= expected_s + EDGE_MAX_DEV_S))
+    search = np.flatnonzero((t >= expected_s) & (t <= expected_s + search_s))
     if np.count_nonzero(baseline) < 3 or search.size < 5:
         return None, "five_point_insufficient_samples"
     if (np.any(~np.isfinite(y[baseline])) or np.any(~np.isfinite(y[search]))
@@ -85,7 +86,7 @@ def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
 
     # 基线和响应分别平滑，避免事件后的阶跃向前泄漏。
     base_y = smooth_native(t[baseline], y[baseline], smooth_ms)
-    event = (t >= expected_s) & (t <= expected_s + EDGE_MAX_DEV_S + .05)
+    event = (t >= expected_s) & (t <= expected_s + search_s + .05)
     event_t = t[event]
     if np.any(~np.isfinite(y[event])) or np.any(np.diff(event_t) > 3 * dt):
         return None, "five_point_missing_samples"
@@ -95,7 +96,7 @@ def pwr_five_point_edge(t, y, expected_s, command_delta, smooth_ms=20.0):
     if threshold >= .8 * abs(command_delta):
         return None, "five_point_baseline_noise_exceeds_step"
     directed = np.sign(command_delta) * (event_y - base)
-    search_count = int(np.count_nonzero(event_t <= expected_s + EDGE_MAX_DEV_S))
+    search_count = int(np.count_nonzero(event_t <= expected_s + search_s))
     confirm_count = max(5, int(np.ceil(.05 / dt)))
     for i in range(search_count - 4):
         if not np.all(directed[i:i + 5] >= threshold):
@@ -229,7 +230,10 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
     basis = ("synchronized_command" if reliable else
              "response_edge_estimate" if edge else "timing_unavailable")
     fallback_reason = ""
-    if not reliable:
+    if "independent_power_start_s" in bridged:
+        start = safe_num(bridged["independent_power_start_s"], float("nan"))
+        basis = "five_point_response_estimate" if np.isfinite(start) else "timing_unavailable"
+    elif not reliable:
         five_point_start, fallback_reason = pwr_five_point_edge(
             t, y, float(bridged["event1_start_s"]), delta)
         if five_point_start is not None:
@@ -243,6 +247,8 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
     if np.isfinite(second) and second > first:
         end = min(end, command_start + second - first)
     end = min(end, float(t[-1]))
+    if "independent_power_end_s" in bridged:
+        end = min(safe_num(bridged["independent_power_end_s"]), float(t[-1]))
     downsampled = pwr_downsampled_signals(bridged, start, end)
     metric_t = downsampled["t_s"]
     metric_y = downsampled[signal]
@@ -296,6 +302,62 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
             reasons.append("数值仅供参考")
         result[metric + "_reason"] = "；".join(reasons)
     return (result, downsampled) if return_downsampled else result
+
+def freq_reg_step_summary(bridged, meta):
+    """Measure the first P response without replacing frequency alignment.
+
+    Regulation has no recorded P command setpoint. Estimate its magnitude from
+    the first hold, and use the opposite frequency direction as the expected P
+    direction. The temporary PWR view only reuses the response measurement;
+    neither the canonical metadata nor the frequency display axis is changed.
+    """
+    def unavailable(reason):
+        result = {key: "" for key in PWR_STEP_SUMMARY_COLS}
+        result.update(step_timing_basis="timing_unavailable", T_s_method="unavailable",
+                      metric_sampling_ms=5, 人工确认Ts="待确认")
+        for metric in ("M_p", "T_up", "T_p", "T_s"):
+            result[metric + "_reason"] = PWR_STEP_REASON_TEXT.get(reason, reason)
+        return result
+
+    t = np.asarray(bridged["t_s"], float).reshape(-1)
+    y = np.asarray(bridged["P_pu"], float).reshape(-1)
+    event = float(bridged.get("power_search_start_s", bridged["event1_start_s"]))
+    if t.size < 3 or t.size != y.size or np.any(~np.isfinite(t)) or np.any(np.diff(t) <= 0):
+        return unavailable("invalid_time_axis_or_signal_length")
+    end = min(float(bridged.get("independent_power_end_s", bridged["event1_end_s"])), float(t[-1]))
+    dt = float(np.median(np.diff(t)))
+    if end - event < .5 or t[0] > event - .5 + 1.1 * dt:
+        return unavailable("insufficient_observation")
+    baseline_end = safe_num(bridged.get("independent_power_start_s"), event)
+    pre = (t >= baseline_end - .5) & (t < baseline_end)
+    tail = (t >= end - .5) & (t < end)
+    if min(int(pre.sum()), int(tail.sum())) < 3:
+        return unavailable("insufficient_samples")
+    if (np.any(~np.isfinite(y[pre | tail]))
+            or np.any(np.diff(t[pre]) > 3 * dt) or np.any(np.diff(t[tail]) > 3 * dt)):
+        return unavailable("missing_samples")
+    initial = float(np.mean(y[pre]))
+    measured_delta = float(np.mean(y[tail])) - initial
+    deviation = safe_num(meta.get("freq_deviation_hz"))
+    if not np.isfinite(deviation) or abs(deviation) < 1e-12:
+        return unavailable("zero_command_step")
+    if abs(measured_delta) < 1e-6:
+        return unavailable("near_zero_measured_step")
+    if np.sign(measured_delta) != -np.sign(deviation):
+        return unavailable("response_direction_mismatch")
+    delta = -np.sign(deviation) * abs(measured_delta)
+    step_meta = {"test_type_code": 3, "P_base_pu": initial,
+                 "P_step_pu": initial + delta, "step_start_s": event,
+                 "step_dur_s": end - event}
+    step_view = dict(bridged)
+    # A frequency edge and a synchronized frequency command are not P response
+    # timestamps. Detect P independently on both SIM and HIL.
+    offset = detect_pwr_edge_offset(t, {"P": y * HIL_P_BASE_W}, step_meta,
+                                   {"code": 3, "event1_start": event}, 0.0)
+    step_view.update(command_time_reliable=0, response_edge_detected=int(offset is not None),
+                     response_edge_normalized_s=event - offset if offset is not None else np.nan)
+    return pwr_step_summary(step_view, step_meta)
+
 
 # =============================================================================
 #  汇总判据阈值：迁移自原离线流程，具体项目应复核适用性。
@@ -1037,6 +1099,15 @@ def normalize_case_time(t_sim, ev, disturbance_time=None,
 # =============================================================================
 
 def detect_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior):
+    from . import freq_reg_timing
+    if freq_reg_timing.is_ordinary(meta):
+        timing = freq_reg_timing.resolve(t_rel, sig, meta, ev, offset_prior, HIL_P_BASE_W)
+        return (None if timing["freq_timing_review_required"] else
+                ev["event1_start"] - timing["freq_event_start_recorder_s"])
+    return _legacy_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior)
+
+
+def _legacy_frequency_edge_offset(t_rel, sig, meta, ev, offset_prior):
     """从频率录波估计调频或惯量事件沿相对元数据的时间偏移。
 
     调频要求频率持续离开实测基线；惯量用分段线性斜坡拟合起点，
@@ -1434,6 +1505,21 @@ def resolve_case_offsets(cases):
     for ci, mat_path, meta in cases:
         ev = event_times_from_meta(meta)
         prior = safe_num(meta.get("hil_rec_start_target_s"), REC_START_NOMINAL_S)
+        from . import freq_reg_timing
+        if freq_reg_timing.is_ordinary(meta):
+            t_rel, sig = load_case_file(mat_path)
+            timing = freq_reg_timing.resolve(t_rel, sig, meta, ev, prior, HIL_P_BASE_W)
+            meta["_freq_reg_timing"] = timing
+            offset = ev["event1_start"] - timing["freq_event_start_recorder_s"]
+            resolved[ci] = (offset, timing["freq_timing_method"])
+            if not timing["freq_timing_review_required"]:
+                detected[ci] = offset
+            # Keep the legacy median pool only for deadband compatibility.
+            # Ordinary regulation never uses this cross-recording fallback.
+            legacy_offset = _legacy_frequency_edge_offset(t_rel, sig, meta, ev, prior)
+            if legacy_offset is not None:
+                fallback_samples.append(legacy_offset)
+            continue
         # BND 是短、小幅扰动，使用平滑后的专用检测；失败时回退自身
         # 元数据，不能套用普通 FRT 批次中位数。
         if "BND" in str(meta.get("test_type", "")).upper():
@@ -1640,8 +1726,17 @@ def write_summary_csv(rows, output_path, profile_name="pwr"):
                    "offset_source", "pre_unstable", "post_unstable", "pre_event_ok"]
     prof = _PROFILES.get(profile_name, _PROFILES["pwr"])
     fieldnames = common_cols + prof["summary_cols"]
-    if profile_name == "pwr":
+    if profile_name in ("pwr", "freq_reg", "inertia"):
         fieldnames += PWR_STEP_SUMMARY_COLS
+    if profile_name == "inertia":
+        from .inertia_response import SUMMARY_FIELDS
+        fieldnames += SUMMARY_FIELDS
+    if profile_name == "volt_prot":
+        from .protection_timing import SUMMARY_FIELDS
+        fieldnames += SUMMARY_FIELDS
+    if profile_name == "freq_reg":
+        from .freq_reg_timing import SUMMARY_FIELDS
+        fieldnames += SUMMARY_FIELDS
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
@@ -1751,9 +1846,36 @@ def prepare_case(mat_path, meta, offset, offset_source):
     stem = os.path.splitext(base)[0]          # case_XXXX_<name>
     t_rel, sig = load_case_file(mat_path, absolute=meta.get("time_basis") == "absolute")
     ev = event_times_from_meta(meta)
+    from . import freq_reg_timing
+    frequency_timing = None
+    if freq_reg_timing.is_ordinary(meta):
+        prior = safe_num(meta.get("hil_rec_start_target_s"), REC_START_NOMINAL_S)
+        frequency_timing = meta.get("_freq_reg_timing")
+        if frequency_timing is None:
+            frequency_timing = freq_reg_timing.resolve(t_rel, sig, meta, ev, prior, HIL_P_BASE_W)
+        offset = ev["event1_start"] - frequency_timing["freq_event_start_recorder_s"]
+        offset_source = frequency_timing["freq_timing_method"]
+        ev["event1_end"] = frequency_timing["freq_event_end_recorder_s"] + offset
+        ev["last_event_end"] = ev["event1_end"]
     t_sim = t_rel + offset
 
     pname = ev.get("profile_name", "pwr")
+    inertia_clock = None
+    protection = None
+    if pname == "inertia":
+        from . import inertia_response
+        inertia_clock = inertia_response.timing(t_rel, sig, meta, ev, offset, offset_source)
+        ev["event1_start"] = inertia_clock["inertia_event_start_input_s"] + offset
+        ev["event1_end"] = inertia_clock["inertia_metric_end_input_s"] + offset
+        ev["last_event_end"] = ev["event1_end"]
+    elif pname == "volt_prot":
+        from . import protection_timing
+        prior = (0. if meta["time_basis"] == "absolute" else
+                 safe_num(meta.get("hil_rec_start_target_s"), REC_START_NOMINAL_S))
+        protection = protection_timing.measure(t_rel, sig["Vp_pu"], sig["breaker"], meta, ev, prior)
+        ev["event1_start"] = protection["protection_display_start_input_s"] + offset
+        ev["event1_end"] = ev["event1_start"] + safe_num(meta.get("event_hold_s"))
+        ev["last_event_end"] = ev["event1_end"]
     if pname == "frt" and "BND" not in str(meta.get("test_type", "")).upper():
         recovery = detect_frt_recovery_time(t_rel, sig["Vp_pu"], meta, ev, offset)
         if recovery is not None:
@@ -1778,10 +1900,14 @@ def prepare_case(mat_path, meta, offset, offset_source):
     add_freq_reg_power_stats(stats, meta, t_sim, P_pu, ev)
 
     # offset 由实际事件沿校准后，事件沿与元数据 event1_start 重合；
-    # 保护测试不做信号沿猜测，直接以元数据事件作为 t1。
+    # Voltage protection and inertia select their measured input-clock anchor
+    # above. Frequency protection retains its existing nominal-time policy.
     t_norm, ev_norm, wm = normalize_case_time(t_sim, ev, ev["event1_start"])
 
-    if pname in ("volt_prot", "freq_prot"):
+    if pname == "volt_prot":
+        stats.update({key: (np.nan if protection[key] is None else protection[key])
+                      for key in ("t1_s", "t2_s", "delta_t_s")})
+    elif pname == "freq_prot":
         t1_raw = ev["event1_start"]
         t2_raw = detect_trip_time(t_sim, sig["breaker"], t1_raw)
         origin = t1_raw - NORMALIZED_PRE_EVENT_S
@@ -1839,6 +1965,47 @@ def prepare_case(mat_path, meta, offset, offset_source):
     if pname == "pwr":
         step_summary, downsampled = pwr_step_summary(bridged, meta, return_downsampled=True)
         row.update(step_summary)
+    elif pname == "inertia":
+        row.update(inertia_response.summary(t_rel, P_pu, Q_pu, meta, inertia_clock))
+    elif pname == "volt_prot":
+        row.update(protection)
+        bridged.update({key: "" if protection[key] is None else protection[key]
+                        for key in protection_timing.SUMMARY_FIELDS})
+    elif pname == "freq_reg" and not is_freq_reg_deadband(meta):
+        # Measure on the complete recorder axis. The display crop and frequency
+        # anchor must not choose a P baseline or truncate its response onset.
+        prior = safe_num(meta.get("hil_rec_start_target_s"), REC_START_NOMINAL_S)
+        nominal = (ev["event1_start"] if meta.get("time_basis") == "absolute" else ev["event1_start"] - prior)
+        metric_end = (frequency_timing["freq_candidate_end_recorder_s"]
+                      if frequency_timing["freq_timing_review_required"] else
+                      frequency_timing["freq_event_end_recorder_s"])
+        if metric_end is None:
+            metric_end = nominal + safe_num(meta.get("event_hold_s"))
+        # The return P edge provides a conservative exclusion boundary only;
+        # it cannot determine the frequency event shown on the plot.
+        p_return = freq_reg_timing.power_onset(t_rel, P_pu, nominal + safe_num(meta.get("event_hold_s")),
+                                               -safe_num(meta.get("freq_deviation_hz")),
+                                               min(float(t_rel[-1]), nominal + safe_num(meta.get("event_hold_s")) + .7),
+                                               search_before_s=0. if meta.get("time_basis") == "absolute" else .3)
+        if p_return is not None:
+            metric_end = min(metric_end, p_return)
+        frequency_timing["freq_metric_end_recorder_s"] = metric_end
+        metric_view = {"t_s": t_rel, "P_pu": P_pu, "Q_pu": Q_pu,
+                       "event1_start_s": nominal, "event1_end_s": metric_end,
+                       "power_search_start_s": nominal,
+                       "independent_power_start_s": frequency_timing["freq_power_start_recorder_s"],
+                       "independent_power_end_s": metric_end}
+        step = freq_reg_step_summary(metric_view, meta)
+        power_start = step["step_response_start_s"]
+        if power_start is not None and power_start != "":
+            step["step_response_start_s"] = float(power_start) - frequency_timing["freq_event_start_recorder_s"] + 1.
+        row.update(step)
+        row.update({key: frequency_timing.get(key, "") for key in freq_reg_timing.SUMMARY_FIELDS})
+        row["rec_offset_s"] = offset  # Preserve the selected clock in comparison plots.
+        row["freq_metric_end_recorder_s"] = metric_end
+        bridged.update({key: "" if frequency_timing.get(key) is None else frequency_timing.get(key, "")
+                        for key in freq_reg_timing.SUMMARY_FIELDS})
+        meta = dict(meta, _freq_reg_timing=frequency_timing)
 
     return ProcessedCase(stem, dict(meta), pname, bridged, ev_norm, row, downsampled)
 

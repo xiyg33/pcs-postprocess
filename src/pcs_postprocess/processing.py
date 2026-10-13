@@ -1734,6 +1734,12 @@ def write_summary_csv(rows, output_path, profile_name="pwr"):
     if profile_name == "volt_prot":
         from .protection_timing import SUMMARY_FIELDS
         fieldnames += SUMMARY_FIELDS
+    if profile_name == "freq_prot":
+        from .frequency_protection import SUMMARY_FIELDS
+        fieldnames += SUMMARY_FIELDS
+    if profile_name == "scr":
+        from .scr_stability import SUMMARY_FIELDS
+        fieldnames += SUMMARY_FIELDS
     if profile_name == "freq_reg":
         from .freq_reg_timing import SUMMARY_FIELDS
         fieldnames += SUMMARY_FIELDS
@@ -1862,6 +1868,7 @@ def prepare_case(mat_path, meta, offset, offset_source):
     pname = ev.get("profile_name", "pwr")
     inertia_clock = None
     protection = None
+    scr_clock = None
     if pname == "inertia":
         from . import inertia_response
         inertia_clock = inertia_response.timing(t_rel, sig, meta, ev, offset, offset_source)
@@ -1875,6 +1882,23 @@ def prepare_case(mat_path, meta, offset, offset_source):
         protection = protection_timing.measure(t_rel, sig["Vp_pu"], sig["breaker"], meta, ev, prior)
         ev["event1_start"] = protection["protection_display_start_input_s"] + offset
         ev["event1_end"] = ev["event1_start"] + safe_num(meta.get("event_hold_s"))
+        ev["last_event_end"] = ev["event1_end"]
+    elif pname == "freq_prot":
+        from . import frequency_protection
+        prior = (0. if meta["time_basis"] == "absolute" else
+                 safe_num(meta.get("hil_rec_start_target_s"), REC_START_NOMINAL_S))
+        protection, voltage_frequency = frequency_protection.measure(t_rel, sig, meta, ev, prior)
+        ev["event1_start"] = protection["protection_display_start_input_s"] + offset
+        ev["event1_end"] = ev["event1_start"] + safe_num(meta.get("event_hold_s"))
+        ev["last_event_end"] = ev["event1_end"]
+    elif pname == "scr" and "V_target_pu" in meta:
+        from . import scr_stability
+        prior = 0. if meta["time_basis"] == "absolute" else offset
+        scr_clock = scr_stability.timing(t_rel, sig, meta, ev, prior)
+        ev["event1_start"] = scr_clock["scr_display_start_input_s"] + offset
+        end = scr_clock["scr_recovery_input_s"]
+        ev["event1_end"] = (end + offset if end is not None else
+                            ev["event1_start"] + safe_num(meta.get("disturbance_duration_s")))
         ev["last_event_end"] = ev["event1_end"]
     if pname == "frt" and "BND" not in str(meta.get("test_type", "")).upper():
         recovery = detect_frt_recovery_time(t_rel, sig["Vp_pu"], meta, ev, offset)
@@ -1900,21 +1924,12 @@ def prepare_case(mat_path, meta, offset, offset_source):
     add_freq_reg_power_stats(stats, meta, t_sim, P_pu, ev)
 
     # offset 由实际事件沿校准后，事件沿与元数据 event1_start 重合；
-    # Voltage protection and inertia select their measured input-clock anchor
-    # above. Frequency protection retains its existing nominal-time policy.
+    # Protection, inertia and SCR select measured input-clock anchors above.
     t_norm, ev_norm, wm = normalize_case_time(t_sim, ev, ev["event1_start"])
 
-    if pname == "volt_prot":
+    if pname in ("volt_prot", "freq_prot"):
         stats.update({key: (np.nan if protection[key] is None else protection[key])
                       for key in ("t1_s", "t2_s", "delta_t_s")})
-    elif pname == "freq_prot":
-        t1_raw = ev["event1_start"]
-        t2_raw = detect_trip_time(t_sim, sig["breaker"], t1_raw)
-        origin = t1_raw - NORMALIZED_PRE_EVENT_S
-        stats["t1_s"] = NORMALIZED_PRE_EVENT_S
-        stats["t2_s"] = t2_raw - origin if np.isfinite(t2_raw) else np.nan
-        stats["delta_t_s"] = (t2_raw - t1_raw
-                              if np.isfinite(t2_raw) else np.nan)
 
     # ---- 桥接输出（裁剪窗口） ----
     bridged = {
@@ -1971,6 +1986,26 @@ def prepare_case(mat_path, meta, offset, offset_source):
         row.update(protection)
         bridged.update({key: "" if protection[key] is None else protection[key]
                         for key in protection_timing.SUMMARY_FIELDS})
+    elif pname == "freq_prot":
+        row.update(protection)
+        bridged.update({key: "" if protection[key] is None else protection[key]
+                        for key in frequency_protection.SUMMARY_FIELDS})
+        bridged["voltage_frequency_hz"] = voltage_frequency[wm]
+    elif pname == "scr" and scr_clock is not None:
+        row.update(scr_clock)
+        bridged.update({key: "" if value is None else value for key, value in scr_clock.items()})
+        # Boundary failures can precede the voltage pulse by many seconds.
+        # Preserve that capture for single-source SCR plots as well as compare.
+        capture_origin = float(t_rel[0])
+        bridged.update(scr_capture_t_s=t_rel - capture_origin,
+                       scr_capture_Vabc_pu=np.column_stack([sig['V' + phase] for phase in 'abc']) / HIL_V_BASE_PEAK_V,
+                       scr_capture_Iabc_pu=np.column_stack([sig['I' + phase] for phase in 'abc']) / HIL_I_BASE_PEAK_A,
+                       scr_capture_P_pu=P_pu,
+                       scr_capture_event_s=scr_clock["scr_configured_start_input_s"] - capture_origin,
+                       scr_capture_display_end_s=scr_clock["scr_display_end_input_s"] - capture_origin,
+                       scr_capture_recovery_s=(scr_clock["scr_recovery_input_s"] - capture_origin
+                                               if scr_clock["scr_recovery_input_s"] is not None else np.nan),
+                       scr_capture_origin_s=capture_origin)
     elif pname == "freq_reg" and not is_freq_reg_deadband(meta):
         # Measure on the complete recorder axis. The display crop and frequency
         # anchor must not choose a P baseline or truncate its response onset.

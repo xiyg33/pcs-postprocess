@@ -36,10 +36,11 @@ def comparison_rows(case_id, meta, summaries, figures):
     return rows
 
 
-def run(paths_config, output, case_id=None):
+def run(paths_config, output, case_id=None, *, case_ids=None, presentation=None):
     return run_comparison("inertia", paths_config, output, case_id,
                           [*p.PWR_STEP_SUMMARY_COLS, *SUMMARY_FIELDS],
                           ["P_ref_pu", "freq_deviation_hz", "freq_ramp_rate_hz_per_s",
                            "event_start_s", "event_hold_s"],
                           prepare_signals, plot_pair, comparison_rows, FIELDS,
-                          "inertia_metrics_version", VERSION, 2)
+                          "inertia_metrics_version", VERSION, 2,
+                          case_ids=case_ids, presentation=presentation)

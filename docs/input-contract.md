@@ -23,7 +23,7 @@
 JSON 必须包含 `mode`、非负整数 `case_index`、非空 `case_name` 和 `time_basis`。文件名中的编号必须与 `case_index` 一致。
 
 - `"time_basis": "recorded"`：`t_s` 是录波器的相对时间。处理器根据实测事件沿对齐元数据中的事件时间；若无法可靠检测，可使用项目配置中的 `record_start_nominal_s` 回退。
-- `"time_basis": "absolute"`：`t_s` 与事件元数据使用同一仿真时钟，首个采样点可以不是零。原始时间轴不平移；inertia 和 volt_prot 仍检测实测扰动起点，仅将显示时间归一化到 1 s。
+- `"time_basis": "absolute"`：`t_s` 与事件元数据使用同一仿真时钟，首个采样点可以不是零。原始时间轴不平移；各模式的指标起点按模式定义检测，显示时间归一化到 1 s。
 
 `record_pre_s`、`record_post_s` 和 `sim_time_s` 是可选的观察窗口信息。每类测试还需要下列数值事件字段：
 
@@ -59,3 +59,32 @@ recorded 是从首样本计时的录波相对秒数，absolute 是原始仿真�
 volt_prot 的 `t1_s=1` 只在实测电压沿已确认时成立；`t2_s` 使用同一变换，
 `delta_t_s=t2_s-t1_s`。未确认沿时，名义时间仅用于展示，不产生 Δt。
 `breaker` 保持可选，但缺失会明确标记 `missing_breaker`，不能视为正常未跳闸。
+
+## SCR 扰动、记录窗口和稳定边界
+
+新对比需要 `V_target_pu`、`disturbance_start_s`、`disturbance_duration_s`、
+`sim_time_s`、`record_pre_s` 和 `record_post_s`。本项目新表为 10/0.2/12.2/10/2 s。
+手动录波的 `scr_event_search_center_input_s` 是输入轴上的搜索先验，不能冒充实测沿。
+`scr_configured_start_input_s` / `scr_configured_end_input_s` 是设定扰动窗，
+`scr_event_start_input_s` / `scr_recovery_input_s` 是实测电压沿，
+`scr_display_end_input_s` 控制实际时间轴的图片范围。两类时刻分别记录。
+`scr_metrics_version=scr_common_horizon_v2`；compare 要求双方和汇总的时序配置一致。
+不要把旧录波的 2 s 起点改成 10 s；必须重新测试、导出和分析。
+单源/对比图保留启动和提前脱网过程，稳定判断采用双方共同观察窗。
+
+路径配置可选 `"compare_cases": {"scr": [7001, 7033, 7034]}` 指定代表例，
+未配置则使用 HIL 已有编号。共享包不硬编码项目编号。
+
+## FREQ_PROT 实测线路扰动计时
+
+`f_target_hz` 表示试验频率目标。主时钟由 `Va_V/Vb_V/Vc_V` 的相位变化估算，
+不由 `f_hz` 或保护门槛选取；`f_hz` 仍按原输入契约提供，用于辅助曲线和基线检查。
+已有 `frequency_protection_reference` 元数据可保留，但不参与新计时。
+
+`protection_event_start_input_s` 为已确认的实测线路扰动起点，
+`protection_trip_input_s` 为其后的持续 breaker 下降沿。
+`delta_t_s` 为两者之差；归一化后 `t1_s=1`、`t2_s=1+delta_t_s`。
+`protection_display_start_input_s` 在检测失败时可使用名义时刻作展示，不能产生 Δt。
+`freq_fit_*` 字段记录拟合依据与质量，`freq_input_sampling_s` 记录输入采样周期。
+新版本 `voltage_disturbance_breaker_v2` 与旧 PLL 门槛口径不兼容，必须重新分析。
+未跳闸、缺通道、起点未确认、扰动前已断开、观察不足分别记录状态和原因。

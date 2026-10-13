@@ -12,6 +12,18 @@ from test_workflow import ROOT, TMP_PARENT, synthetic
 
 
 class PathsTests(unittest.TestCase):
+    def test_optional_representative_cases_and_invalid_duplicates(self):
+        with tempfile.TemporaryDirectory(dir=TMP_PARENT) as tmp:
+            config = self.make_config(Path(tmp))
+            data = json.loads(config.read_text())
+            data["compare_cases"] = {"scr": [1, 3, 4]}
+            config.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(PathsConfig.load(config).compare_cases["scr"], [1, 3, 4])
+            data["compare_cases"]["scr"] = [1, 1]
+            config.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "compare_cases"):
+                PathsConfig.load(config)
+
     def make_config(self, base: Path) -> Path:
         config = base / "postprocess_paths.local.json"
         config.write_text(json.dumps({

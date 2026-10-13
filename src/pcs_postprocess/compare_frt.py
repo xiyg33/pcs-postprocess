@@ -13,10 +13,13 @@ from .compare_pwr import finite, one, plt, recordings, relative
 from .config import ProjectConfig
 from .contract import validate_case
 from .paths import load_paths_config
+from .compare_presentation import (PRESENTATION_FIELDS, apply_presentation, figure_path,
+                                   presentation_record, render_plot, select_case_ids)
 from .plot_common import pwr_power_axis_limits, PWR_POWER_TICK_STEP_PU
 
 
-SIGNALS = {"Vpos_pu": "正序电压", "P_pu": "有功功率", "Q_pu": "无功功率"}
+SIGNALS = {"Vpos_pu": "正序电压", "P_pu": "有功功率", "Q_pu": "无功功率",
+           "Ip_pu": "有功电流", "Iq_pu": "无功电流"}
 METRIC_COLUMNS = {
     "f1_a_pre_steady_mean": ("A", "mean_deviation"),
     "f1_b2_disturbed_steady_mean": ("B2", "mean_deviation"),
@@ -226,7 +229,7 @@ def duration_assessment(pair: dict, meta: dict, rows: list, details: dict) -> di
     return result
 
 
-def plot_pair(pair: dict, paths: tuple[Path, Path], case_id: int, case_name: str) -> None:
+def plot_pair(pair: dict, paths: tuple[Path, Path], case_id: int, case_name: str, presentation=None) -> None:
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     layouts = (("Vpos_pu", "Vabc_pu", "Iabc_pu"), ("Vpos_pu", "P_pu", "Ip_pu", "Q_pu", "Iq_pu"))
@@ -266,12 +269,14 @@ def plot_pair(pair: dict, paths: tuple[Path, Path], case_id: int, case_name: str
             axes[-1].set_xlabel("时间 / s")
             fig.suptitle(f"Case {case_id}: {case_name} — SIM / HIL")
             fig.tight_layout(rect=(0, 0, 1, .96))
+            apply_presentation(fig, case_id, presentation)
             fig.savefig(path, dpi=150, facecolor="white")
         finally:
             plt.close(fig)
 
 
-def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> dict:
+def run(paths_config: Path | None, output: Path, case_id: int | None = None,
+        *, case_ids=None, presentation=None) -> dict:
     config = load_paths_config(paths_config)
     processing.configure_project(ProjectConfig.load(config.project_config))
     inventories, summaries, references = {}, {}, {}
@@ -281,7 +286,7 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
         path = summary_path(profile.output_dir("frt"), side)
         summaries[side] = read_summary(path)
         references[side] = relative(path, output)
-    ids = [case_id] if case_id is not None else sorted(set(inventories["sim"]) | set(inventories["hil"]))
+    ids = select_case_ids(case_id, case_ids, set(inventories["sim"]) | set(inventories["hil"]))
     if not ids:
         raise ValueError("No FRT canonical recordings")
     output.mkdir(parents=True, exist_ok=False)
@@ -312,11 +317,12 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
             pair = {side: prepare_signals(files[side], meta[side], sources[side]) for side in files}
             metrics, details = deviations(pair)
             assessment = duration_assessment(pair, meta, metrics, details)
-            image_paths = (figures / f"case_{ci:04d}_sim_hil_overlay.png",
-                           figures / f"case_{ci:04d}_sim_hil_overlay_power_current.png")
+            image_paths = (figure_path(figures, ci, "overlay", presentation),
+                           figure_path(figures, ci, "overlay_power_current", presentation))
             images = [relative(path, output) for path in image_paths]
-            plot_pair(pair, image_paths, ci, meta["hil"]["case_name"])
+            render_plot(plot_pair, pair, image_paths, ci, meta["hil"]["case_name"], presentation=presentation)
             for row in metrics:
+                row.update(presentation_record(meta["hil"], ci, presentation))
                 row.update(case_index=ci, case_name=meta["hil"]["case_name"], test_type=meta["hil"]["test_type"],
                            sim_recovery_basis=pair["sim"]["recovery_basis"], hil_recovery_basis=pair["hil"]["recovery_basis"],
                            configured_duration_difference_s=assessment["configured_duration_difference_s"],
@@ -326,6 +332,7 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
                     row["reason"] = "; ".join(filter(None, (row["reason"], "duration_difference_has_observed_effect; recovery_aligned_separately")))
             rows.extend(metrics)
             completed.append({"case_index": ci, "figures": images,
+                              **presentation_record(meta["hil"], ci, presentation),
                               "canonical": {s: relative(p, output) for s, p in files.items()},
                               "metadata": {s: relative(p.with_name(p.stem + "_meta.json"), output) for s, p in files.items()},
                               "alignment": {s: data["timing"] for s, data in pair.items()},
@@ -335,10 +342,10 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
             errors.append({"case_index": ci, "reason": str(exc)})
             print(f"case {ci}: error: {exc}")
     with (output / "compare_summary_frt.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=[*FIELDS, *PRESENTATION_FIELDS] if presentation is not None else FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    manifest = {"schema_version": 1, "mode": "frt", "metric_sampling_s": DT,
+    manifest = {"selected_case_ids": ids, "schema_version": 1, "mode": "frt", "metric_sampling_s": DT,
                 "summary_definition": "F1/F2/F3/FG; onset aligned, recovery independently aligned",
                 "summaries": references, "project_config": relative(config.project_config, output),
                 "compare_csv": "compare_summary_frt.csv", "completed": len(completed),

@@ -40,8 +40,11 @@ def render_case(case, fig_dir):
     fig, axes = plt.subplots(3, 1, figsize=FIG_SIZE, sharex=True)
 
     ax = axes[0]
+    if "voltage_frequency_hz" in data:
+        voltage_f = data["voltage_frequency_hz"]
+        ax.plot(tw, voltage_f, lw=.85, color="tab:blue", label="measured line frequency")
     if f_wm is not None:
-        ax.plot(scalar_t, scalar["f_hz"], lw=0.8, color="tab:red")
+        ax.plot(scalar_t, scalar["f_hz"], lw=.7, ls=":", color="tab:red", label="recorded PLL (auxiliary)")
     else:
         ax.text(0.5, 0.5, "f signal unavailable",
                 transform=ax.transAxes, ha="center", va="center",
@@ -51,6 +54,8 @@ def render_case(case, fig_dir):
     if not np.isnan(f_target):
         ax.axhline(f_target, ls=":", color="gray", lw=0.8)
     ax.set_ylabel("f (Hz)")
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="upper right", fontsize=8)
 
     ax = axes[1]
     ax.plot(scalar_t, scalar["P_pu"], lw=0.8, color="tab:blue")
@@ -67,7 +72,7 @@ def render_case(case, fig_dir):
                 transform=ax.transAxes, ha="center", va="center",
                 fontsize=10, color="gray")
     ax.set_ylabel("Q (pu)")
-    ax.set_xlabel("sim time (s)")
+    ax.set_xlabel("normalized time (s); measured line disturbance = 1 s")
 
     for ax in axes:
         ax.axvline(ev["event1_start"], color="red", ls="--", lw=0.8, alpha=0.5)
@@ -82,9 +87,9 @@ def render_case(case, fig_dir):
     ft = safe_num(meta.get("f_target_hz"))
 
     if not np.isnan(delta_t):
-        suptitle = "Case %04d: %s  f_target=%.1f Hz  Δt=%.4f s" % (ci, cn, ft, delta_t)
+        suptitle = "Case %04d: %s  f_target=%.1f Hz  disturbance-to-breaker Δt=%.4f s" % (ci, cn, ft, delta_t)
     elif np.isnan(t2):
-        suptitle = "Case %04d: %s  f_target=%.1f Hz  Δt=N/A (no_trip)" % (ci, cn, ft)
+        suptitle = "Case %04d: %s  f_target=%.1f Hz  Δt=N/A (%s)" % (ci, cn, ft, data.get("protection_status", "unavailable"))
     else:
         suptitle = "Case %04d: %s  f_target=%.1f Hz  Δt=N/A (detection_error)" % (ci, cn, ft)
 

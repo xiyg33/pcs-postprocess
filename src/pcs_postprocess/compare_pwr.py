@@ -22,6 +22,8 @@ from pcs_postprocess.contract import validate_case
 from pcs_postprocess.paths import load_paths_config
 from pcs_postprocess.plot_common import pwr_power_axis_limits, PWR_POWER_TICK_STEP_PU
 from matplotlib.ticker import MultipleLocator
+from pcs_postprocess.compare_presentation import (PRESENTATION_FIELDS, apply_presentation,
+                                                 figure_path, presentation_record, render_plot, select_case_ids)
 
 
 METRICS = (
@@ -165,7 +167,7 @@ def full_signals(path: Path, meta: dict, summary: dict) -> dict:
                 "recorder_to_normalized_shift_s": timing["recorder_to_normalized_shift_s"]}}
 
 
-def plot_pair(pair: dict, metas: dict, path: Path, case_id: int) -> None:
+def plot_pair(pair: dict, metas: dict, path: Path, case_id: int, presentation=None) -> None:
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
@@ -196,6 +198,7 @@ def plot_pair(pair: dict, metas: dict, path: Path, case_id: int) -> None:
         axes[-1].set_xlabel("时间 / s")
         fig.suptitle(f"Case {case_id}: {metas['hil']['case_name']} — SIM / HIL")
         fig.tight_layout(rect=(0, 0, 1, .96))
+        apply_presentation(fig, case_id, presentation)
         fig.savefig(path, dpi=150, facecolor="white")
     finally:
         plt.close(fig)
@@ -230,7 +233,8 @@ def comparison_rows(case_id: int, meta: dict, summaries: dict, figure: str) -> l
     return rows
 
 
-def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> dict:
+def run(paths_config: Path | None, output: Path, case_id: int | None = None,
+        *, case_ids=None, presentation=None) -> dict:
     paths = load_paths_config(paths_config)
     processing.configure_project(ProjectConfig.load(paths.project_config))
     inventories, summaries, references = {}, {}, {}
@@ -240,7 +244,7 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
         path = summary_path(profile.output_dir("pwr"), side)
         summaries[side] = read_summary(path, side)
         references[side] = relative(path, output)
-    ids = [case_id] if case_id is not None else sorted(set(inventories["sim"]) | set(inventories["hil"]))
+    ids = select_case_ids(case_id, case_ids, set(inventories["sim"]) | set(inventories["hil"]))
     if not ids:
         raise ValueError("No PWR canonical recordings")
     output.mkdir(parents=True, exist_ok=False)
@@ -259,13 +263,16 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
                     if sources[side][key] != metas[side][key]:
                         raise ValueError(f"{side}: summary / canonical mismatch: {key}")
             validate_pair(metas["sim"], metas["hil"])
-            image_path = figures / f"case_{ci:04d}_sim_hil_overlay.png"
+            image_path = figure_path(figures, ci, "overlay", presentation)
             image_ref = relative(image_path, output)
             metrics = comparison_rows(ci, metas["hil"], sources, image_ref)
             pair = {s: full_signals(files[s], metas[s], sources[s]) for s in files}
-            plot_pair(pair, metas, image_path, ci)
+            render_plot(plot_pair, pair, metas, image_path, ci, presentation=presentation)
+            for row in metrics:
+                row.update(presentation_record(metas["hil"], ci, presentation))
             rows.extend(metrics)
             completed.append({"case_index": ci, "figure_png": image_ref,
+                              **presentation_record(metas["hil"], ci, presentation),
                               "canonical": {s: relative(files[s], output) for s in files},
                               "metadata": {s: relative(files[s].with_name(files[s].stem + "_meta.json"), output) for s in files},
                               "alignment": {s: pair[s]["timing"] for s in pair},
@@ -275,10 +282,10 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
             errors.append({"case_index": ci, "reason": str(exc)})
             print(f"case {ci}: error: {exc}")
     with (output / "compare_summary_pwr.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=[*FIELDS, *PRESENTATION_FIELDS] if presentation is not None else FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    manifest = {"schema_version": 1, "mode": "pwr", "metric_event": "event1",
+    manifest = {"selected_case_ids": ids, "schema_version": 1, "mode": "pwr", "metric_event": "event1",
                 "summaries": references, "project_config": relative(paths.project_config, output),
                 "compare_csv": "compare_summary_pwr.csv", "completed": len(completed),
                 "exceptions": len(errors), "cases": completed, "errors": errors}

@@ -1,5 +1,6 @@
 """SCR plot for a prepared canonical case."""
 import os
+import json
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -13,10 +14,20 @@ COLORS_ABC = ["tab:blue", "tab:orange", "tab:green"]
 
 def render_case(case, fig_dir):
     """Render SCR annotations using aligned prepared arrays."""
+    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
     stem, meta, ev = case.stem, case.meta, case.events
     data = case.bridged
+    complete_capture = "scr_capture_t_s" in data
+    if complete_capture:
+        data = dict(data, t_s=data["scr_capture_t_s"], Vabc_pu=data["scr_capture_Vabc_pu"],
+                    Iabc_pu=data["scr_capture_Iabc_pu"], P_pu=data["scr_capture_P_pu"])
+        end = data["scr_capture_recovery_s"]
+        ev = dict(ev, event1_start=data["scr_capture_event_s"],
+                  event1_end=end if np.isfinite(end) else data["scr_capture_event_s"] + float(meta["disturbance_duration_s"]))
     tw = data["t_s"]
-    scalar = scalar_plot_data(data, ev)
+    scalar_input = {"t_s": data["t_s"], "P_pu": data["P_pu"]} if complete_capture else data
+    scalar = scalar_plot_data(scalar_input, ev)
     Va_pu, Vb_pu, Vc_pu = data["Vabc_pu"].T
     Ia_pu, Ib_pu, Ic_pu = data["Iabc_pu"].T
 
@@ -30,6 +41,13 @@ def render_case(case, fig_dir):
         if len(brk_chg):
             has_breaker_trip = True
             breaker_trip_t = tw[brk_chg[0]]
+    if data.get("scr_metrics_version"):
+        # Full-capture evidence includes failures before the displayed window;
+        # rising startup edges are not breaker trips.
+        falls = json.loads(data["scr_trip_times_input_s"])
+        has_breaker_trip = bool(falls)
+        origin = float(data["scr_capture_origin_s"]) if complete_capture else float(data["scr_display_start_input_s"]) - 1.
+        breaker_trip_t = falls[0] - origin if falls else None
 
     # 6. 创建图
     fig, axes = plt.subplots(3, 1, figsize=FIG_SIZE, sharex=True)
@@ -59,20 +77,22 @@ def render_case(case, fig_dir):
     P_ref = safe_num(meta.get("P_ref_pu"))
     ax.axhline(P_ref, ls="--", color="gray", lw=0.8)
     ax.set_ylabel("P (pu)")
-    ax.set_xlabel("normalized time (s)")
+    ax.set_xlabel("recording time (s)" if complete_capture else "normalized time (s)")
 
     # ---- 事件标记 ----
     for ax in axes:
         ax.axvline(ev["event1_start"], color="red", ls="--", lw=0.8)
         ax.axvline(ev["event1_end"], color="red", ls="--", lw=0.8)
-        if has_breaker_trip and breaker_trip_t is not None:
+        if has_breaker_trip and breaker_trip_t is not None and 0. <= breaker_trip_t <= tw[-1]:
             ax.axvline(breaker_trip_t, color="red", ls="-", lw=1.2, alpha=0.7)
         ax.axvspan(ev["event1_start"], ev["event1_end"], alpha=0.08, color="red")
         ax.grid(True, alpha=0.3)
         ax.set_xlim(left=0.0)
+        if complete_capture:
+            ax.set_xlim(0., data["scr_capture_display_end_s"])
 
     # ---- Breaker trip 标注 ----
-    if has_breaker_trip and breaker_trip_t is not None:
+    if has_breaker_trip and breaker_trip_t is not None and 0. <= breaker_trip_t <= tw[-1]:
         axes[0].text(breaker_trip_t, axes[0].get_ylim()[1] * 0.9,
                      "breaker trip", fontsize=8, color="red",
                      rotation=90, ha="right", va="top")
@@ -82,7 +102,8 @@ def render_case(case, fig_dir):
     cn = str(meta.get("case_name", stem))
     scr = safe_num(meta.get("SCR_value"))
     method = str(meta.get("hil_rec_start_method", "?"))
-    stable_str = "UNSTABLE" if has_breaker_trip else "stable"
+    stable_str = ("不正常（扰动前脱网）" if has_breaker_trip and breaker_trip_t < ev["event1_start"] else
+                  "不正常（脱网）" if has_breaker_trip else "正常（未检测到脱网）")
     if ci_value is None:
         fault_t = safe_num(meta.get("manual_fault_time_s"), float("nan"))
         title = "%s  SCR=%.1f  [%s, fault=%.3f, event_x=%.1f, %s]" % (

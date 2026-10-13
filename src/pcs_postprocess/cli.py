@@ -118,7 +118,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="pcs-postprocess")
     commands = parser.add_subparsers(dest="command", required=True)
     from . import compare
-    compare_parser = commands.add_parser("compare", help="SIM/HIL 叠加图及报告指标表（PWR/FRT/FREQ_REG/INERTIA/VOLT_PROT）")
+    compare_parser = commands.add_parser("compare", help="SIM/HIL 叠加图、响应指标与 SCR 稳定边界（七类模式）")
     compare.add_arguments(compare_parser)
     for name in ("validate", "run"):
         command = commands.add_parser(name)

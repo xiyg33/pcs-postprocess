@@ -15,6 +15,8 @@ from .compare_pwr import (FIELDS as PWR_FIELDS, METRICS, comparison_rows as step
 from .config import ProjectConfig
 from .contract import validate_case
 from .paths import load_paths_config
+from .compare_presentation import (PRESENTATION_FIELDS, apply_presentation, figure_path,
+                                   presentation_record, render_plot, select_case_ids)
 from .plot_common import (configure_nominal_frequency, freq_reg_display_limits,
                           pwr_power_axis_limits, FREQ_REG_DISPLAY_TICK_HZ,
                           PWR_POWER_TICK_STEP_PU)
@@ -106,7 +108,7 @@ def prepare_signals(path: Path, meta: dict, summary: dict) -> dict:
                        **{key: summary[key] for key in TIMING_FIELDS}}}
 
 
-def plot_pair(pair: dict, metas: dict, paths: tuple[Path, Path], case_id: int) -> None:
+def plot_pair(pair: dict, metas: dict, paths: tuple[Path, Path], case_id: int, presentation=None) -> None:
     plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     layouts = (("f_hz", "Vabc_pu", "Iabc_pu"), ("f_hz", "P_pu", "Ip_pu", "Q_pu", "Iq_pu"))
@@ -154,6 +156,7 @@ def plot_pair(pair: dict, metas: dict, paths: tuple[Path, Path], case_id: int) -
             title_note = "\n频率对时待人工确认：当前使用单例名义起点" if pending else ""
             fig.suptitle(f"Case {case_id}: {metas['hil']['case_name']} — SIM / HIL{title_note}", fontsize=10)
             fig.tight_layout(rect=(0, 0, 1, .96))
+            apply_presentation(fig, case_id, presentation)
             fig.savefig(path, dpi=150, facecolor="white")
         finally:
             plt.close(fig)
@@ -217,7 +220,8 @@ def missing_summary(reason: str) -> dict:
     return row
 
 
-def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> dict:
+def run(paths_config: Path | None, output: Path, case_id: int | None = None,
+        *, case_ids=None, presentation=None) -> dict:
     paths = load_paths_config(paths_config)
     config = ProjectConfig.load(paths.project_config)
     processing.configure_project(config)
@@ -229,8 +233,8 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
         summary = summary_path(source.output_dir("freq_reg"), side)
         summaries[side] = read_summary(summary, side)
         references[side] = relative(summary, output)
-    ids = [case_id] if case_id is not None else sorted(set(inventories["sim"]) | set(inventories["hil"]) |
-                                                      set(summaries["sim"]) | set(summaries["hil"]))
+    ids = select_case_ids(case_id, case_ids, set(inventories["sim"]) | set(inventories["hil"]) |
+                          set(summaries["sim"]) | set(summaries["hil"]))
     if not ids:
         raise ValueError("No freq_reg cases")
     output.mkdir(parents=True, exist_ok=False)
@@ -261,13 +265,17 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
             images = ("", "")
             pair = {}
             if not processing.is_freq_reg_deadband(meta):
-                image_paths = (output / "figures" / f"case_{ci:04d}_sim_hil_overlay.png",
-                               output / "figures" / f"case_{ci:04d}_sim_hil_power_current.png")
+                image_paths = (figure_path(output / "figures", ci, "overlay", presentation),
+                               figure_path(output / "figures", ci, "power_current", presentation))
                 images = tuple(relative(p, output) for p in image_paths)
                 pair = {side: prepare_signals(files[side], metas[side], source_rows[side]) for side in files}
-                plot_pair(pair, metas, image_paths, ci)
-            rows.extend(comparison_rows(ci, meta, source_rows, images))
+                render_plot(plot_pair, pair, metas, image_paths, ci, presentation=presentation)
+            case_rows = comparison_rows(ci, meta, source_rows, images)
+            for row in case_rows:
+                row.update(presentation_record(meta, ci, presentation))
+            rows.extend(case_rows)
             cases.append({"case_index": ci, "test_type": meta["test_type"], "figure_png": images[0],
+                          **presentation_record(meta, ci, presentation),
                           "power_current_figure_png": images[1], "missing_sources": missing,
                           "canonical": {s: relative(p, output) for s, p in files.items()},
                           "metadata": {s: relative(p.with_name(p.stem + "_meta.json"), output) for s, p in files.items()},
@@ -279,10 +287,10 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None) -> 
             errors.append({"case_index": ci, "reason": str(exc)})
             print(f"case {ci}: error: {exc}")
     with (output / "compare_summary_freq_reg.csv").open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=[*FIELDS, *PRESENTATION_FIELDS] if presentation is not None else FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    manifest = {"schema_version": 1, "mode": "freq_reg", "metric_event": "event1",
+    manifest = {"selected_case_ids": ids, "schema_version": 1, "mode": "freq_reg", "metric_event": "event1",
                 "summaries": references, "project_config": relative(paths.project_config, output),
                 "compare_csv": "compare_summary_freq_reg.csv",
                 "completed": sum(not c["missing_sources"] for c in cases),

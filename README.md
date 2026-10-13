@@ -223,7 +223,7 @@ pcs-postprocess compare --mode frt --all
 0 s 开始；HIL 红色实线、SIM 蓝色虚线。电流方向计算和平滑复用单源流程，低于
 0.05 pu 电压的无效方向电流保留缺失值。两边实际恢复时刻分别标记，图不拉伸时间。
 
-`compare_summary_frt.csv` 每例三行（正序电压、P、Q），单位均为 pu；沿用参考偏差表
+`compare_summary_frt.csv` 每例五行（正序电压、P、Q、Ip、Iq），单位均为 pu；沿用参考偏差表
 的九个字段。单源 summary 只读取现有对时信息，不复制或重写，其他偏差由成对波形计算。
 优先引用 `sim_summary_frt.csv` / `hil_summary_frt.csv`，兼容旧 `summary_frt.csv`。
 
@@ -240,6 +240,9 @@ pcs-postprocess compare --mode frt --all
 F1 为 A/B2/C2 的均值差绝对值，F2 为 B1/C1 的平均绝对误差，F3 为 A/B2/C2 的最大
 绝对误差，FG 为五段按有效采样数加权的平均绝对误差。缺失采样或空窗口对应指标留空；
 任一段不可计算时 FG 留空。`status` 是数据可用性说明，不表示正式验收通过。
+Ip/Iq 指标使用功率电流叠加图中的同一条曲线：三相电压定向瞬时电流除以配置的峰值
+电流基准，再经 20 ms 平滑和 5 ms 降采样。低于 0.05 pu 电压的无效电流保留 NaN，
+受影响窗口的指标及该电流的 FG 留空，其他信号仍独立计算。
 
 故障持续时间配置不同时仍绘图、计算。清单的 `duration_assessment` 比较恢复分别对齐与
 只对齐起点的九项指标，并用较长实测故障时长构造暂态/保护间隔作窗口敏感性检查。
@@ -360,7 +363,8 @@ INERTIA 汇总的 `M_p_pct` 为相对实测变化量的超调百分比，
 每例四行，双方数值来自单源汇总，`deviation=SIM-HIL`。
 超调差值单位为 `percentage_points`，其余为 `s`。
 
-VOLT_PROT 每例一张 V+/P/Q/breaker 叠加图、一行 breaker 响应时间对比。
+VOLT_PROT 每例一张 V+/P/Q 三行叠加图、一行 breaker 响应时间对比。
+不绘制 breaker 子图；跳闸时刻以竖线标出，第一行分别标注双方 t2 和 Δt。
 电压沿沿用 FRT 的 20 ms 平滑、目标方向、自适应阈值和持续越限判据，
 不是同步指令时刻；双方均标记 `measured_voltage_edge` 估算。
 `t1_s=1`，在原始 breaker 时间轴查找此后的 1→0 下降沿，
@@ -374,3 +378,83 @@ VOLT_PROT 每例一张 V+/P/Q/breaker 叠加图、一行 breaker 响应时间对
 缺通道等输入/检测问题写入 manifest 并返回非零状态。
 原始输入时刻、归一化转换、指标版本及来源文件保存在汇总和清单中。
 CSV 使用 UTF-8 BOM；重复编号、缺失来源/汇总行及参数不一致记录为异常，批次继续。
+
+## SCR：10 s 扰动与边界代表例
+
+本项目用例表已改为扰动起点 10 s、持续 0.2 s、总时长 12.2 s，
+record_pre=10 s、record_post=2 s。新 SIM 数据需重新测试、重新导出；
+不能把旧 2 s 录波改写元数据后当作新数据。
+路径配置可设置 `"compare_cases": {"scr": [7001, 7033, 7034]}`。
+
+```powershell
+pcs-postprocess run --mode scr --source sim --case 7001,7033,7034
+pcs-postprocess run --mode scr --source hil --case 7001,7033,7034
+pcs-postprocess compare --mode scr --all
+```
+
+每例一张 Vabc/Iabc/P 对比图，并分别保存双方状态及其原因。
+单源和 compare 都保留实际录波时间轴，按配置显示 0～12.2 s、标注设定扰动 10 s；
+实测电压下降、恢复沿另行保存在汇总中，完整启动和提前脱网不被裁掉。
+HIL 边界代表例为 P100 的 7001 不正常、Pm100 的 7033 正常和 7034 不正常；
+SIM 根据新录波重新判断，不预设状态。
+新 `scr_common_horizon_v2` 汇总保存设定时序和实测沿；compare 检查双方设定起点、
+持续时间、总时长、记录窗口以及单源汇总的一致性，不允许混用新旧时序。
+
+稳定判据使用相同的恢复后观察时长，受配置终点和较短录波限制，上限 8 s；
+跳过恢复后 0.3 s，剩余至少 1 s。P 经 20 ms 平滑和 5 ms 采样，
+后/前半段去均值 RMS ≥1.3 且后段 RMS ≥max(0.01 pu, 3×基线标准差)，
+或 |P|≥2 pu 持续 20 ms，判为振荡失稳。持续 10 个原始低电平采样的
+breaker 下降沿记为脱网；扰动前脱网是适应性失败，不证明振荡失稳。
+观察或检测不足记为无法判定。`compare_boundary_scr.csv` 只报告已测区间，
+不跨未知点推断，不给稀疏或非单调结果虚构临界 SCR。
+
+## FREQ_PROT：实测线路扰动至脱网总响应时间
+
+```powershell
+pcs-postprocess run --mode freq_prot --source sim
+pcs-postprocess run --mode freq_prot --source hil
+pcs-postprocess compare --mode freq_prot --case 6017
+pcs-postprocess compare --mode freq_prot --all
+```
+
+**Δt = 持续 breaker 下降沿时刻 − 实测线路频率扰动起点。**
+线路起点来自三相电压旋转相量、额定周期的对称平滑及连续分段相位拟合，
+校验方向、基线、残差、搜索边界和观察长度，并排除跳闸对拟合的污染。
+不再用 PLL 达到保护门槛的时间，也不依赖 `frequency_protection_reference`。
+新版本为 `voltage_disturbance_breaker_v2`，旧门槛计时汇总必须重算。
+
+双方图上实测起点归一化为 1 s，breaker 保持原始采样检测；
+每例一张 f/P/Q 三行图、一行主 CSV，差值为 SIM−HIL。
+双方跳闸也保留完整扰动及扰动后录波，不自动缩短横轴。当前 60 s 扰动从 1 s 到 61 s，
+含 2 s 扰动后录波的完整数据图显示 0～63 s；录波不足时只展示已有数据。
+不绘制 breaker 子图；跳闸时刻以竖线标出，第一行分别标注双方 t2 和 Δt。
+线路频率为主曲线，录波 PLL 可作辅助。总响应包含测频动态、保护计时及输出链路，
+不解释为控制器内部定时器的配置延时。
+缺少实测起点、缺 breaker、扰动前已断开、观察不足或确实未跳闸时留空并说明原因。
+PLL 晚越限不再造成空值；正常未跳闸和一方跳闸不算处理错误。
+诊断 CSV 保存输入起止时刻和拟合质量，不重复输出固件参数 JSON。
+
+## 对比归档与单源覆盖
+
+compare 默认输出 `result_compare/<mode>/<运行时间>/`，每次新建时间戳目录。
+单源 run 继续覆盖各自 `postprocess/` 中的同名图片与汇总，不增加时间戳。
+compare 不修改单源结果。显式 `--output` 可指定一个新的对比目录。
+日常查看 `figures/`、`compare_summary_<mode>.csv` 和边界/计时诊断 CSV。
+每次对比最多一份 `manifest.json`，仅用于输入来源、版本、对时依据和异常追溯；
+不生成额外调试/验收 JSON，不复制原始 metadata JSON，不在说明中转储参数 JSON。
+旧历史结果保留，按新的运行时间戳识别本次输出。
+
+## Python 对比接口：筛选与展示配置
+
+各模式的 `compare_<mode>.run(...)` 可选传入 `case_ids=[...]` 与
+`presentation={case_index: {...}}`。不传时保持既有命令的行为；`case_ids` 与单个
+`case_id` 互斥，必须是非空、唯一的整数列表。
+
+展示项可指定 `display_case_name`、`title`、`reported_P_ref_pu`、
+`power_axis_limits`、`power_tick_pu` 和 `broad_q_axis`。新名称用于安全的 PNG 文件名；
+标题保留原图中的状态说明。功率坐标扩大到容纳全部显示曲线，竖直事件标记不参与取值。
+绘图使用原始参数和既有信号处理结果，展示功率不参与配对校验、参考值或指标计算。
+
+指定展示配置时，对比 CSV 与逐案例清单追加 `display_case_name`、
+`reported_P_ref_pu`、`source_P_ref_pu` 和 `approximation`，原有字段保留原值。
+项目专有的案例编号、近似许可和连续录波配对由伙伴仓库管理，本包不硬编码这些选择。

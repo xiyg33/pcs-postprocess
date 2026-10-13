@@ -12,6 +12,8 @@ from .config import ProjectConfig
 from .contract import validate_case
 from .paths import load_paths_config
 from .plot_common import configure_nominal_frequency
+from .compare_presentation import (PRESENTATION_FIELDS, figure_path,
+                                   presentation_record, select_case_ids)
 
 
 def read_summary(directory, side, mode, required):
@@ -74,28 +76,44 @@ def signals(path, meta, start, end, power_start=None, power_end=None, currents=F
 
 def run_comparison(mode, paths_config, output, case_id, required, numeric_keys,
                    prepare, plot, make_rows, fields, version_key, version, images_per_case,
-                   source_errors=None):
+                   source_errors=None, tolerate_source_errors=False, overwrite=False,
+                   case_ids=None, presentation=None):
     paths = load_paths_config(paths_config)
     config = ProjectConfig.load(paths.project_config)
     p.configure_project(config)
     configure_nominal_frequency(config.nominal_frequency_hz)
     inventories, summaries, references = {}, {}, {}
+    input_errors = {}
     for side in ("sim", "hil"):
         source = paths.source(side)
-        inventories[side] = recordings(source.input_dir(mode))
-        summary, summaries[side] = read_summary(source.output_dir(mode), side, mode,
-                                               ["case_index", "case_name", "test_type", *required])
-        references[side] = relative(summary, output)
-    ids = ([case_id] if case_id is not None else
-           sorted(set(inventories["sim"]) | set(inventories["hil"]) |
-                  set(summaries["sim"]) | set(summaries["hil"])))
+        try:
+            inventories[side] = recordings(source.input_dir(mode))
+        except OSError as exc:
+            if not tolerate_source_errors:
+                raise
+            inventories[side] = {}
+            input_errors[side] = str(exc)
+        try:
+            summary, summaries[side] = read_summary(source.output_dir(mode), side, mode,
+                                                   ["case_index", "case_name", "test_type", *required])
+            references[side] = relative(summary, output)
+        except (OSError, ValueError) as exc:
+            if not tolerate_source_errors:
+                raise
+            summaries[side] = {}
+            input_errors[side] = str(exc)
+    ids = select_case_ids(case_id, case_ids,
+                          set(inventories["sim"]) | set(inventories["hil"]) |
+                          set(summaries["sim"]) | set(summaries["hil"]))
     if not ids:
         raise ValueError(f"No {mode} cases")
-    output.mkdir(parents=True, exist_ok=False)
-    (output / "figures").mkdir()
+    output.mkdir(parents=True, exist_ok=overwrite)
+    (output / "figures").mkdir(exist_ok=overwrite)
     rows, cases, errors = [], [], []
     for ci in ids:
         try:
+            if input_errors:
+                raise ValueError(str(input_errors))
             files = {s: one(inventories[s], ci, s + " canonical") for s in inventories}
             sources = {s: one(summaries[s], ci, s + " summary") for s in summaries}
             metas = {s: validate_case(files[s], mode) for s in files}
@@ -112,14 +130,20 @@ def run_comparison(mode, paths_config, output, case_id, required, numeric_keys,
                         raise ValueError(f"{side}: summary / canonical parameter mismatch: {key}; "
                                          "rerun single-source analysis")
             validate_pair(metas, numeric_keys)
-            image_paths = [output / "figures" / f"case_{ci:04d}_sim_hil_{suffix}.png"
+            image_paths = [figure_path(output / "figures", ci, suffix, presentation)
                            for suffix in (["overlay", "power_current"] if images_per_case == 2 else ["overlay"])]
             image_refs = [relative(path, output) for path in image_paths]
             pair = {s: prepare(files[s], metas[s], sources[s]) for s in files}
             case_rows = make_rows(ci, metas["hil"], sources, image_refs)
-            plot(pair, metas, image_paths, ci)
+            if presentation is None:
+                plot(pair, metas, image_paths, ci)
+            else:
+                plot(pair, metas, image_paths, ci, presentation=presentation)
+            for row in case_rows:
+                row.update(presentation_record(metas["hil"], ci, presentation))
             rows.extend(case_rows)
             cases.append({"case_index": ci, "case_name": metas["hil"]["case_name"],
+                          **presentation_record(metas["hil"], ci, presentation),
                           "figures": image_refs,
                           "canonical": {s: relative(path, output) for s, path in files.items()},
                           "metadata": {s: relative(path.with_name(path.stem + "_meta.json"), output)
@@ -136,12 +160,15 @@ def run_comparison(mode, paths_config, output, case_id, required, numeric_keys,
             print(f"case {ci}: error: {exc}")
     csv_name = f"compare_summary_{mode}.csv"
     with (output / csv_name).open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(handle, fieldnames=[*fields, *PRESENTATION_FIELDS] if presentation is not None else fields)
         writer.writeheader()
         writer.writerows(rows)
-    manifest = {"schema_version": 1, "mode": mode, "metric_version": version,
+    manifest = {"selected_case_ids": ids, "schema_version": 1, "mode": mode, "metric_version": version,
                 "metric_event": "event1", "summaries": references,
                 "project_config": relative(paths.project_config, output), "compare_csv": csv_name,
                 "completed": len(cases), "exceptions": len(errors), "cases": cases, "errors": errors}
-    (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    manifest_name = "manifest.json"
+    manifest.update(output_policy="overwrite_fixed_compare_directory" if overwrite else "explicit_output_directory",
+                    manifest_file=manifest_name)
+    (output / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     return manifest

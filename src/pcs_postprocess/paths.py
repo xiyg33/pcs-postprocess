@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
@@ -34,6 +34,7 @@ class SourcePaths:
 class PathsConfig:
     project_config: Path
     sources: dict[str, SourcePaths]
+    compare_cases: dict[str, list[int]] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path) -> "PathsConfig":
@@ -41,7 +42,8 @@ class PathsConfig:
         if not path.is_file():
             raise ValueError(f"Path config does not exist: {path}; copy postprocess_paths.example.json to {DEFAULT_PATHS_CONFIG}")
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or set(raw) != {"project_config", "sources"}:
+        if (not isinstance(raw, dict) or not {"project_config", "sources"}.issubset(raw)
+                or set(raw) - {"project_config", "sources", "compare_cases"}):
             raise ValueError("Path config requires project_config and sources")
         if not isinstance(raw["project_config"], str) or not raw["project_config"].strip():
             raise ValueError("project_config must be a nonempty path")
@@ -74,7 +76,16 @@ class PathsConfig:
             if subdirs["input_subdir"] == subdirs["output_subdir"]:
                 raise ValueError(f"{name}: input_subdir and output_subdir must differ")
             sources[name] = SourcePaths(resolve(root), **subdirs)
-        return cls(resolve(raw["project_config"]), sources)
+        compare_cases = raw.get("compare_cases", {})
+        if not isinstance(compare_cases, dict):
+            raise ValueError("compare_cases must map modes to case-index lists")
+        for mode, ids in compare_cases.items():
+            if (mode not in ("frt", "pwr", "freq_reg", "inertia", "volt_prot", "freq_prot", "scr")
+                    or not isinstance(ids, list) or not ids
+                    or any(type(ci) is not int or ci < 0 for ci in ids)
+                    or len(ids) != len(set(ids))):
+                raise ValueError(f"Invalid compare_cases selection for {mode!r}")
+        return cls(resolve(raw["project_config"]), sources, compare_cases)
 
     def source(self, name: str) -> SourcePaths:
         try:

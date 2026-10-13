@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--mode", default="pwr", choices=("pwr", "frt", "freq_reg", "inertia", "volt_prot"))
+    parser.add_argument("--mode", default="pwr", choices=("pwr", "frt", "freq_reg", "inertia", "volt_prot", "freq_prot", "scr"))
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--case", type=int)
     selection.add_argument("--all", action="store_true")
@@ -24,10 +24,14 @@ def execute(args, parser: argparse.ArgumentParser) -> int:
         from . import compare_inertia as mode
     elif args.mode == "volt_prot":
         from . import compare_volt_prot as mode
+    elif args.mode == "freq_prot":
+        from . import compare_freq_prot as mode
+    elif args.mode == "scr":
+        from . import compare_scr as mode
     else:
         from . import compare_pwr as mode
-    output = args.output or Path.cwd() / "result_compare" / args.mode / datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
     try:
+        output = args.output or Path.cwd() / "result_compare" / args.mode / datetime.now().strftime("%Y-%m-%d_%H%M%S_%f")
         result = mode.run(args.paths_config, output, args.case)
     except (ValueError, KeyError, OSError) as exc:
         parser.exit(2, f"error: {exc}\n")

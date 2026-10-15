@@ -120,6 +120,9 @@ def main(argv=None) -> int:
     from . import compare
     compare_parser = commands.add_parser("compare", help="SIM/HIL 叠加图、响应指标与 SCR 稳定边界（七类模式）")
     compare.add_arguments(compare_parser)
+    from . import assessment
+    assess_parser = commands.add_parser("assess", help="按参考限值评价 FRT、连续穿越及 breaker 达标情况")
+    assessment.add_arguments(assess_parser)
     for name in ("validate", "run"):
         command = commands.add_parser(name)
         command.add_argument("--mode", required=True, choices=MODES)
@@ -140,6 +143,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "compare":
         return compare.execute(args, compare_parser)
+    if args.command == "assess":
+        return assessment.execute(args, assess_parser)
     try:
         filter_ids = _case_filter(args.case)
         # 显式参数优先；只有缺少目录或额定值路径时才读取来源配置。

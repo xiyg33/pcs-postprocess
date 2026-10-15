@@ -15,6 +15,7 @@ from .compare_pwr import (FIELDS as PWR_FIELDS, METRICS, comparison_rows as step
 from .config import ProjectConfig
 from .contract import validate_case
 from .paths import load_paths_config
+from .step_response import SETTLING_TIME_RULE
 from .compare_presentation import (PRESENTATION_FIELDS, apply_presentation, figure_path,
                                    presentation_record, render_plot, select_case_ids)
 from .plot_common import (configure_nominal_frequency, freq_reg_display_limits,
@@ -27,6 +28,9 @@ FIELDS = [*PWR_FIELDS, "power_current_figure_png", "P_ref_pu", "freq_deviation_h
           "sim_offset_source", "hil_offset_source"]
 for _side in ("sim", "hil"):
     FIELDS += [f"{_side}_{key}" for key in TIMING_FIELDS]
+    FIELDS += [f"{_side}_{key}" for key in (
+        "pre_P_mean_pu", "event_end_P_mean_pu",
+        "freq_reg_upward_limit_pu", "freq_reg_downward_limit_pu")]
 
 
 def summary_path(directory: Path, side: str) -> Path:
@@ -51,6 +55,8 @@ def read_summary(path: Path, side: str) -> dict:
                    for metric, _, column, _, _ in METRICS}
         dynamic = (set(processing.PWR_STEP_SUMMARY_COLS) - set(aliases)) | set(TIMING_FIELDS)
         for row in reader:
+            if processing._is_freq_reg_limit_case(row) and "P_change_signed_pu" not in columns:
+                raise ValueError(f"{path}: missing P_change_signed_pu; rerun single-source analysis")
             if not processing.is_freq_reg_deadband(row):
                 missing = (dynamic - columns) | {column for column, alias in aliases.items() if alias not in columns}
                 if missing:
@@ -106,6 +112,32 @@ def prepare_signals(path: Path, meta: dict, summary: dict) -> dict:
                        "step_response_start_s": start,
                        "step_timing_basis": summary["step_timing_basis"],
                        **{key: summary[key] for key in TIMING_FIELDS}}}
+
+
+def power_limit_row(case_id: int, meta: dict, summaries: dict, figures: tuple[str, str]) -> dict:
+    """Reference the measured signed delta; preserve saturation and wrong-direction responses."""
+    row = dict(case_index=case_id, case_name=meta["case_name"], test_type=meta["test_type"],
+               event="event1", signal="P_pu", metric="P_change_signed_pu",
+               parameter="出力限幅（带符号功率变化）", unit="pu", deviation_unit="pu",
+               figure_png=figures[0], power_current_figure_png=figures[1])
+    states = []
+    for side in ("sim", "hil"):
+        source = summaries[side]
+        value = finite(source.get("P_change_signed_pu"), "P_change_signed_pu", optional=True)
+        reason = source.get("reason", "")
+        if value is None:
+            reason = "; ".join(filter(None, (reason, "missing P_change_signed_pu; rerun single-source analysis")))
+        status = ("unavailable" if value is None else "estimated"
+                  if source.get("offset_source") not in ("edge", "absolute_time") else "valid")
+        states.append(status)
+        row.update({f"{side}_value": value, f"{side}_status": status, f"{side}_reason": reason})
+        for key in ("pre_P_mean_pu", "event_end_P_mean_pu",
+                    "freq_reg_upward_limit_pu", "freq_reg_downward_limit_pu"):
+            row[f"{side}_{key}"] = finite(source.get(key), key, optional=True)
+    difference = None if any(row[s + "_value"] is None for s in ("sim", "hil")) else row["sim_value"] - row["hil_value"]
+    row.update(deviation=difference, absolute_deviation=None if difference is None else abs(difference),
+               status="unavailable" if "unavailable" in states else "estimated" if "estimated" in states else "valid")
+    return row
 
 
 def plot_pair(pair: dict, metas: dict, paths: tuple[Path, Path], case_id: int, presentation=None) -> None:
@@ -165,6 +197,8 @@ def plot_pair(pair: dict, metas: dict, paths: tuple[Path, Path], case_id: int, p
 def comparison_rows(case_id: int, meta: dict, summaries: dict, figures: tuple[str, str]) -> list[dict]:
     if not processing.is_freq_reg_deadband(meta):
         rows = step_rows(case_id, dict(meta, test_type_code=3), summaries, figures[0])
+        if processing._is_freq_reg_limit_case(meta):
+            rows.append(power_limit_row(case_id, meta, summaries, figures))
         for row in rows:
             row["power_current_figure_png"] = figures[1]
             for side in ("sim", "hil"):
@@ -295,7 +329,8 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None,
                 "compare_csv": "compare_summary_freq_reg.csv",
                 "completed": sum(not c["missing_sources"] for c in cases),
                 "partial": sum(bool(c["missing_sources"]) for c in cases),
-                "exceptions": len(errors), "cases": cases, "errors": errors}
+                "exceptions": len(errors), "cases": cases, "errors": errors,
+                "settling_time_rule": SETTLING_TIME_RULE}
     manifest["timing_review_cases"] = sorted({int(row["case_index"]) for row in rows
                                               if any(str(row.get(s + "_freq_timing_review_required")) == "1"
                                                      for s in ("sim", "hil"))})

@@ -11,6 +11,7 @@ from .compare_pwr import finite, one, recordings, relative
 from .config import ProjectConfig
 from .contract import validate_case
 from .paths import load_paths_config
+from .step_response import SETTLING_TIME_RULE
 from .plot_common import configure_nominal_frequency
 from .compare_presentation import (PRESENTATION_FIELDS, figure_path,
                                    presentation_record, select_case_ids)
@@ -168,6 +169,8 @@ def run_comparison(mode, paths_config, output, case_id, required, numeric_keys,
                 "project_config": relative(paths.project_config, output), "compare_csv": csv_name,
                 "completed": len(cases), "exceptions": len(errors), "cases": cases, "errors": errors}
     manifest_name = "manifest.json"
+    if mode == "inertia":
+        manifest["settling_time_rule"] = SETTLING_TIME_RULE
     manifest.update(output_policy="overwrite_fixed_compare_directory" if overwrite else "explicit_output_directory",
                     manifest_file=manifest_name)
     (output / manifest_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")

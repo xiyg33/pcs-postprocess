@@ -29,7 +29,9 @@ class RegulationMetricsTests(unittest.TestCase):
     def response(self, baseline=.35, delta=.2, delay=.08):
         t = np.arange(0, 5.001, .001)
         u = np.maximum(t - 1. - delay, 0.)
-        y = baseline + delta * (1. - np.exp(-u / .08))
+        # Complete the response into an exact hold, giving the measured maximum
+        # a real first sample before the remaining settling-observation window.
+        y = baseline + delta * np.where(u >= .65, 1., 1. - np.exp(-u / .08))
         y[t >= 4.] = baseline  # restoration must never enter first-step metrics
         return {"t_s": t, "P_pu": y, "Q_pu": np.zeros_like(t),
                 "event1_start_s": 1., "event1_end_s": 4.,
@@ -56,7 +58,8 @@ class RegulationMetricsTests(unittest.TestCase):
         data = self.response()
         t = data["t_s"]
         u = np.maximum(t - 1.08, 0.)
-        data["P_pu"] = .35 + .2 * (1. - np.exp(-u / .08)) + .02 * np.sin(2 * np.pi * 5 * u)
+        data["P_pu"] = (.35 + .2 * (1. - np.exp(-u / .08))
+                        + .04 * np.exp(-u) * np.sin(2 * np.pi * 5 * u))
         data["P_pu"][t <= 1.08] = .35
         result = processing.freq_reg_step_summary(data, {"freq_deviation_hz": -.2})
         self.assertEqual(result["T_s_method"], "fourth_band_entry_estimate")
@@ -90,6 +93,23 @@ class RegulationMetricsTests(unittest.TestCase):
         result = processing.freq_reg_step_summary(data, {"freq_deviation_hz": -.2})
         self.assertIsNone(result["M_p_pct"])
         self.assertIn("缺失采样", result["M_p_reason"])
+
+    def test_power_limits_cover_threshold_and_larger_deviations(self):
+        data = self.response()
+        for deviation in (.2, .25, -.25, .3, -.6):
+            with self.subTest(deviation=deviation):
+                meta = {"test_type": "FREQ_REG", "freq_deviation_hz": deviation}
+                result = processing.add_freq_reg_power_stats(
+                    {"pre_P_mean_pu": .35}, meta, data["t_s"], data["P_pu"],
+                    {"event1_start": 1., "event1_end": 3.9})
+                if abs(deviation) < .25:
+                    self.assertNotIn("P_change_signed_pu", result)
+                else:
+                    self.assertAlmostEqual(result["P_change_signed_pu"], .2, places=6)
+                    self.assertAlmostEqual(result["freq_reg_upward_limit_pu"], .2, places=6)
+                    self.assertTrue(np.isnan(result["freq_reg_downward_limit_pu"]))
+        self.assertFalse(processing._is_freq_reg_limit_case(
+            {"test_type": "FREQ_REG_DEADBAND", "freq_deviation_hz": .3}))
 
 
 class RegulationComparisonTests(unittest.TestCase):
@@ -195,6 +215,37 @@ class RegulationComparisonTests(unittest.TestCase):
                 self.assertEqual(result["exceptions"], int(missing))
                 self.assertEqual(result["partial"], int(missing))
                 self.assertFalse(list((out / "figures").iterdir()))
+
+    def test_signed_power_limit_is_referenced_without_clipping_or_changing_sign(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            paths, files, sources = self.make_project(base)
+            for side, delta in (("sim", -1.0303), ("hil", .7267)):
+                meta_path = files[side].with_name(files[side].stem + "_meta.json")
+                meta = json.loads(meta_path.read_text())
+                meta["freq_deviation_hz"] = -.5
+                meta_path.write_text(json.dumps(meta))
+                sources[side].update(freq_deviation_hz=-.5, P_change_signed_pu=delta,
+                                     pre_P_mean_pu=.35, event_end_P_mean_pu=.35 + delta,
+                                     freq_reg_upward_limit_pu=delta if delta > 0 else "",
+                                     freq_reg_downward_limit_pu=delta if delta < 0 else "")
+                self.write_summary(base, side, sources[side])
+            with patch.object(compare, "plot_pair"):
+                manifest = compare.run(paths, base / "compare")
+            self.assertEqual(manifest["exceptions"], 0)
+            with (base / "compare/compare_summary_freq_reg.csv").open(encoding="utf-8-sig") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 5)
+            row = rows[-1]
+            self.assertEqual(row["metric"], "P_change_signed_pu")
+            self.assertAlmostEqual(float(row["sim_value"]), -1.0303)
+            self.assertAlmostEqual(float(row["hil_value"]), .7267)
+            self.assertAlmostEqual(float(row["deviation"]), -1.757)
+            self.assertEqual(row["sim_freq_reg_upward_limit_pu"], "")
+            self.assertEqual(row["hil_freq_reg_downward_limit_pu"], "")
+            sources["sim"].pop("P_change_signed_pu")
+            with self.assertRaisesRegex(ValueError, "missing P_change_signed_pu"):
+                compare.read_summary(self.write_summary(base, "sim", sources["sim"]), "sim")
 
     def test_old_summary_requires_regeneration_and_preferred_name(self):
         with tempfile.TemporaryDirectory() as tmp:

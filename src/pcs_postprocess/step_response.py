@@ -8,6 +8,30 @@ METRICS = (("M_p", "超调量", "%", 10.0),
            ("T_p", "峰值时间", "s", 0.2),
            ("T_s", "稳定时间", "s", 1.0))
 
+SETTLING_TIME_RULE = "T_up < T_p < T_s; same response start; no valid T_s without ordered T_up and T_p"
+
+
+def peak_order_reason(rise_s, peak_s):
+    """Keep an independently measured peak when rise is unavailable; reject reversed/equal pairs."""
+    if peak_s is None or rise_s is None or not np.isfinite(rise_s):
+        return ""
+    return "peak_not_after_rise" if not np.isfinite(peak_s) or peak_s <= rise_s else ""
+
+
+def settling_order_reason(rise_s, peak_s, settling_s):
+    """Check durations measured from the same start, without changing either value."""
+    if settling_s is None:
+        return ""
+    if rise_s is None or not np.isfinite(rise_s):
+        return "rise_time_unavailable_for_settling"
+    if peak_s is None or not np.isfinite(peak_s):
+        return "peak_time_unavailable_for_settling"
+    if peak_order_reason(rise_s, peak_s):
+        return "peak_not_after_rise"
+    if not np.isfinite(settling_s) or settling_s <= peak_s:
+        return "settling_not_after_peak"
+    return ""
+
 
 def smooth_native(t, y, smooth_ms=20.0):
     """用边界延拓的居中滑窗平滑；不默默补齐缺失采样。"""
@@ -26,7 +50,8 @@ def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0, tail_windo
     """测量 [start, end) 内的一段阶跃，排除下一次指令。
 
     基线至少需要 0.5 s，末段至少需要 0.1 s。比较末段前后半窗均值和拟合漂移，
-    两者均不得超过实测阶跃的 5%。稳定时间还要求剩余观察区间持续落在 5% 带内；
+    两者均不得超过实测阶跃的 5%。严格要求上升时间 < 实测峰值时间 < 稳定时间，
+    且峰值后的剩余观察区间持续落在 5% 带内；
     平滑不会抹掉用于稳定性判断的纹波。调用方负责把结束时刻限制在录波范围内。
     """
     out = {"values": {key: None for key, *_ in METRICS}, "reasons": {},
@@ -111,6 +136,20 @@ def measure_step(t, y, start_s, end_s, command_delta, smooth_ms=20.0, tail_windo
         out["reasons"]["T_up"] = "ninety_percent_not_reached"
     outside = np.flatnonzero(np.abs(yy - final) > band + 1e-12 * max(1., abs(delta)))
     settle_i = int(outside[-1] + 1) if outside.size else 0
+    rise_s = out["values"]["T_up"]
+    if rise_s is None:
+        out["reasons"]["T_s"] = "rise_time_unavailable_for_settling"
+        return out
+    reason = peak_order_reason(rise_s, out["values"]["T_p"])
+    if reason:
+        out["values"]["T_p"] = None
+        out["reasons"]["T_p"] = reason
+        out["reasons"]["T_s"] = reason
+        return out
+    # Search real samples after the measured peak, retaining the original
+    # remaining-observation requirement rather than inventing a delay.
+    after_peak = np.flatnonzero(tt - start_s > out["values"]["T_p"])
+    settle_i = max(settle_i, int(after_peak[0]) if after_peak.size else len(tt))
     if settle_i < len(tt) and end_s - tt[settle_i] >= tail_s - dt:
         out["values"]["T_s"] = float(tt[settle_i] - start_s)
     else:

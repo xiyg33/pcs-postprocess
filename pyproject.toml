@@ -17,5 +17,8 @@ pcs-postprocess = "pcs_postprocess.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+pcs_postprocess = ["standards/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

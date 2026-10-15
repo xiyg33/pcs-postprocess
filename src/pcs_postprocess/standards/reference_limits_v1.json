@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "version": "provided_reference_limits_v1",
+  "description": "Transcription of the supplied reference images; no engineering timing tolerance.",
+  "sources": {
+    "frt": {
+      "image": "postprocess_adapters/compare_reference/frt_ref.png",
+      "sha256": "798cfd1b319e3cfbc09ec04dc7b06714c2cef28780c65db4d84665ffac4fac57",
+      "table": "表 E.1 允许最大偏差值"
+    },
+    "protection": {
+      "image": "postprocess_adapters/compare_reference/protection_ref.png",
+      "sha256": "cb556fe6c4e40fae69b1d17ff035c9a8e0eb2b150c84afd99f656549ad9ad52b",
+      "table": "保护功能、动作条件、确认时间及动作逻辑"
+    }
+  },
+  "frt": {
+    "unit": "pu",
+    "metric_groups": {
+      "f1_a_pre_steady_mean": "F1",
+      "f1_b2_disturbed_steady_mean": "F1",
+      "f1_c2_post_steady_mean": "F1",
+      "f2_b1_rise_transient_mae": "F2",
+      "f2_c1_recovery_transient_mae": "F2",
+      "f3_a_pre_steady_max": "F3",
+      "f3_b2_disturbed_steady_max": "F3",
+      "f3_c2_post_steady_max": "F3",
+      "fg_weighted_overall_mae": "FG"
+    },
+    "limits": {
+      "Vpos_pu": {"F1": 0.02, "F2": 0.05, "F3": 0.05, "FG": 0.05},
+      "P_pu": {"F1": 0.10, "F2": 0.20, "F3": 0.15, "FG": 0.15},
+      "Q_pu": {"F1": 0.10, "F2": 0.20, "F3": 0.15, "FG": 0.15},
+      "Ip_pu": {"F1": 0.10, "F2": 0.20, "F3": 0.15, "FG": 0.15},
+      "Iq_pu": {"F1": 0.10, "F2": 0.20, "F3": 0.15, "FG": 0.15}
+    }
+  },
+  "protection": {
+    "timing_interpretation": "Measured disturbance onset to sustained breaker falling edge; reference confirmation time is used as the upper limit.",
+    "frequency_stage_one_scope": "Breaker must remain closed; power conversion and its 100 ms confirmation time are not evaluated.",
+    "untriggered_scope": "Untriggered and normal adaptation conditions require breaker to remain closed.",
+    "volt_prot": {
+      "target_column": "V_target_pu",
+      "unit": "pu",
+      "rules": [
+        {"id": "voltage_over_I", "stage": "过压Ⅰ段", "lower": 1.1, "lower_inclusive": false, "upper": 1.2, "upper_inclusive": true, "action": "open", "confirmation_time_s": 10.1, "time_limit_s": 10.1},
+        {"id": "voltage_over_II", "stage": "过压Ⅱ段", "lower": 1.2, "lower_inclusive": false, "upper": null, "upper_inclusive": false, "action": "open", "confirmation_time_s": 1.1, "time_limit_s": 1.1},
+        {"id": "voltage_under_I", "stage": "欠压Ⅰ段", "lower": 0.5, "lower_inclusive": true, "upper": 0.85, "upper_inclusive": false, "action": "open", "confirmation_time_s": 2.1, "time_limit_s": 2.1},
+        {"id": "voltage_under_II", "stage": "欠压Ⅱ段", "lower": 0.0, "lower_inclusive": true, "upper": 0.5, "upper_inclusive": false, "action": "open", "confirmation_time_s": 1.5, "time_limit_s": 1.5},
+        {"id": "voltage_untriggered", "stage": "未触发保护", "lower": 0.85, "lower_inclusive": true, "upper": 1.1, "upper_inclusive": true, "action": "closed", "confirmation_time_s": null, "time_limit_s": null}
+      ]
+    },
+    "freq_prot": {
+      "target_column": "f_target_hz",
+      "unit": "Hz",
+      "rules": [
+        {"id": "frequency_over_I", "stage": "过频Ⅰ段", "lower": 50.5, "lower_inclusive": false, "upper": 51.5, "upper_inclusive": true, "action": "closed", "confirmation_time_s": 0.1, "time_limit_s": null},
+        {"id": "frequency_over_II", "stage": "过频Ⅱ段", "lower": 51.5, "lower_inclusive": false, "upper": null, "upper_inclusive": false, "action": "open", "confirmation_time_s": 0.1, "time_limit_s": 0.1},
+        {"id": "frequency_under_I", "stage": "欠频Ⅰ段", "lower": 46.5, "lower_inclusive": true, "upper": 48.5, "upper_inclusive": false, "action": "closed", "confirmation_time_s": 0.1, "time_limit_s": null},
+        {"id": "frequency_under_II", "stage": "欠频Ⅱ段", "lower": 0.0, "lower_inclusive": false, "upper": 46.5, "upper_inclusive": false, "action": "open", "confirmation_time_s": 0.1, "time_limit_s": 0.1},
+        {"id": "frequency_untriggered", "stage": "未触发保护", "lower": 48.5, "lower_inclusive": true, "upper": 50.5, "upper_inclusive": true, "action": "closed", "confirmation_time_s": null, "time_limit_s": null}
+      ]
+    }
+  }
+}

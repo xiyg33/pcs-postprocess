@@ -20,6 +20,7 @@ from pcs_postprocess import processing
 from pcs_postprocess.config import ProjectConfig
 from pcs_postprocess.contract import validate_case
 from pcs_postprocess.paths import load_paths_config
+from pcs_postprocess.step_response import SETTLING_TIME_RULE, peak_order_reason, settling_order_reason
 from pcs_postprocess.plot_common import pwr_power_axis_limits, PWR_POWER_TICK_STEP_PU
 from matplotlib.ticker import MultipleLocator
 from pcs_postprocess.compare_presentation import (PRESENTATION_FIELDS, apply_presentation,
@@ -216,6 +217,16 @@ def comparison_rows(case_id: int, meta: dict, summaries: dict, figure: str) -> l
             source = summaries[side]
             value = finite(source[column], column, optional=True)
             reason = source[metric + "_reason"]
+            order_reason = ""
+            if metric in ("T_p", "T_s"):
+                rise = finite(source["T_up_s"], "T_up_s", optional=True)
+                peak = finite(source["T_p_s"], "T_p_s", optional=True)
+                order_reason = (peak_order_reason(rise, peak) if metric == "T_p"
+                                else settling_order_reason(rise, peak, value))
+                if order_reason:
+                    value = None
+                    reason = "；".join(filter(None, (reason, processing.PWR_STEP_REASON_TEXT[order_reason],
+                                                  "请重新计算单源指标 / rerun single-source analysis")))
             basis = source["step_timing_basis"]
             estimated = (bool(reason.strip()) or (metric != "M_p" and basis not in
                          ("sim_command", "synchronized_command")) or
@@ -226,6 +237,9 @@ def comparison_rows(case_id: int, meta: dict, summaries: dict, figure: str) -> l
                         f"{side}_manual_T_s": source["人工确认Ts"]})
             for key in ("step_timing_basis", "step_response_start_s", "T_s_method", "metric_sampling_ms"):
                 row[f"{side}_{key}"] = source[key]
+            if order_reason and metric == "T_s":
+                row[f"{side}_T_s_method"] = "unavailable"
+                row[f"{side}_manual_T_s"] = "待确认"
         difference = None if any(row[s + "_value"] is None for s in ("sim", "hil")) else row["sim_value"] - row["hil_value"]
         row.update(deviation=difference, absolute_deviation=None if difference is None else abs(difference),
                    status="unavailable" if "unavailable" in states else "estimated" if "estimated" in states else "valid")
@@ -288,7 +302,8 @@ def run(paths_config: Path | None, output: Path, case_id: int | None = None,
     manifest = {"selected_case_ids": ids, "schema_version": 1, "mode": "pwr", "metric_event": "event1",
                 "summaries": references, "project_config": relative(paths.project_config, output),
                 "compare_csv": "compare_summary_pwr.csv", "completed": len(completed),
-                "exceptions": len(errors), "cases": completed, "errors": errors}
+                "exceptions": len(errors), "cases": completed, "errors": errors,
+                "settling_time_rule": SETTLING_TIME_RULE}
     (output / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     return manifest
 

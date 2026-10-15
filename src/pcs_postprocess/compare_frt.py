@@ -175,6 +175,17 @@ def segment_metrics(pair: dict, signal: str, window: dict) -> dict:
 
 def deviations(pair: dict, recovery_aligned: bool = True, longer_windows: bool = False) -> tuple[list, dict]:
     definitions = windows(pair, recovery_aligned, longer_windows)
+    estimated = any(data["recovery_basis"] != "detected" or
+                    data["timing"]["offset_source"] not in ("edge", "absolute_time") for data in pair.values())
+    return deviations_for_windows(pair, definitions, estimated=estimated)
+
+
+def deviations_for_windows(pair: dict, definitions: list[dict], *, estimated: bool = False) -> tuple[list, dict]:
+    """Summarize explicit A/B1/B2/C1/C2 windows on per-side time origins.
+
+    Continuous events supply their own adjacent-stage windows while retaining
+    the single-fault formulas, missing-data policy and per-unit signals.
+    """
     rows, details = [], {}
     for signal, label in SIGNALS.items():
         segments = {window["code"]: segment_metrics(pair, signal, window) for window in definitions}
@@ -185,8 +196,6 @@ def deviations(pair: dict, recovery_aligned: bool = True, longer_windows: bool =
         count = sum(data["sample_count"] for data in segments.values())
         row["fg_weighted_overall_mae"] = (sum(data["mae"] * data["sample_count"] for data in segments.values()) / count
                                          if count and not failures else None)
-        estimated = any(data["recovery_basis"] != "detected" or
-                        data["timing"]["offset_source"] not in ("edge", "absolute_time") for data in pair.values())
         row.update(status="unavailable" if failures else "estimated" if estimated else "valid",
                    reason="; ".join(failures + (["timing_estimated"] if estimated else [])))
         rows.append(row)

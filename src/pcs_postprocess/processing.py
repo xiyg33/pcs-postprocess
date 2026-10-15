@@ -42,8 +42,12 @@ PWR_STEP_REASON_TEXT = {
     "timing_unavailable": "未找到可用于计算的阶跃起点",
     "baseline_unstable": "扰动前功率仍在变化",
     "final_steady_state_unconfirmed": "阶跃末段仍在变化",
-    "not_settled_within_observation": "观察时间内未持续稳定，稳定时间无法确定",
+    "not_settled_within_observation": "峰值后的观察区间未满足持续稳定条件，稳定时间无法确定",
     "ninety_percent_not_reached": "响应未达到阶跃幅值的90%",
+    "rise_time_unavailable_for_settling": "上升时间无法确认，稳定时间无法确定",
+    "peak_not_after_rise": "实测峰值时间必须严格晚于上升时间",
+    "peak_time_unavailable_for_settling": "峰值时间无法确认，稳定时间无法确定",
+    "settling_not_after_peak": "稳定时间必须严格晚于峰值时间",
     "near_zero_measured_step": "实测阶跃幅值过小",
     "response_direction_mismatch": "响应方向与指令不符",
     "missing_samples": "录波存在缺失采样",
@@ -141,7 +145,7 @@ def pwr_fourth_band_entry(t, y, start, end, measured, smooth_ms=20.0):
     这是供绘图显示的估计时间，不能证明其后持续稳定。与其他阶跃指标使用
     同一条 20 ms 平滑曲线，只统计第一段，不读取 `end` 之后的回程阶跃。
     """
-    from .step_response import smooth_native
+    from .step_response import smooth_native, settling_order_reason
 
     initial = measured.get("initial_pu")
     final = measured.get("final_pu")
@@ -159,7 +163,11 @@ def pwr_fourth_band_entry(t, y, start, end, measured, smooth_ms=20.0):
     inside = np.abs(yy - final) <= .05 * abs(final - initial)
     # 窗口起点已在带内不算一次由带外进入。
     entries = np.flatnonzero(inside[1:] & ~inside[:-1]) + 1
-    return float(tt[entries[3]] - start) if entries.size >= 4 else None
+    candidate = float(tt[entries[3]] - start) if entries.size >= 4 else None
+    values = measured.get("values", {})
+    if settling_order_reason(values.get("T_up"), values.get("T_p"), candidate):
+        return None
+    return candidate
 
 
 def downsample_scalar_signals(bridged, names, start=None, end=None):
@@ -214,7 +222,7 @@ def pwr_downsampled_signals(bridged, start=None, end=None):
 
 def pwr_step_summary(bridged, meta, return_downsampled=False):
     """HIL first-step metrics on 5 ms P/Q; detect the edge on raw samples."""
-    from .step_response import measure_step
+    from .step_response import measure_step, peak_order_reason
     code = int(safe_num(meta.get("test_type_code")))
     signal = "Q_pu" if code == 4 else "P_pu"
     prefix = signal[0]
@@ -254,6 +262,10 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
     metric_y = downsampled[signal]
     measured = measure_step(metric_t, metric_y, start, end, delta, smooth_ms=0.0)
     pwr_estimate_unstable_tail(metric_t, metric_y, start, end, measured, smooth_ms=0.0)
+    peak_reason = peak_order_reason(measured["values"]["T_up"], measured["values"]["T_p"])
+    if peak_reason:
+        measured["values"]["T_p"] = None
+        measured["reasons"]["T_p"] = peak_reason
     fourth_entry = pwr_fourth_band_entry(metric_t, metric_y, start, end, measured,
                                          smooth_ms=0.0)
     if fourth_entry is not None:
@@ -267,7 +279,12 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
         settling_method = "unavailable"
         if (measured.get("initial_pu") is not None
                 and measured.get("final_pu") is not None):
-            measured["reasons"]["T_s"] = "fewer_than_four_band_entries_and_not_settled"
+            if measured["values"]["T_up"] is None:
+                measured["reasons"]["T_s"] = "rise_time_unavailable_for_settling"
+            elif measured["values"]["T_p"] is None:
+                measured["reasons"]["T_s"] = measured["reasons"].get("T_p") or "peak_time_unavailable_for_settling"
+            else:
+                measured["reasons"]["T_s"] = "fewer_than_four_band_entries_and_not_settled"
     columns = {"M_p": "M_p_pct", "T_up": "T_up_s",
                "T_p": "T_p_s", "T_s": "T_s_s"}
     result = {"step_timing_basis": basis,
@@ -285,9 +302,9 @@ def pwr_step_summary(bridged, meta, return_downsampled=False):
         elif reason == "fourth_band_entry_estimate":
             reasons.append("第4次进入目标值±5%范围的估算值，之后可能再次离开")
         elif reason == "continuous_5pct_without_four_entries":
-            reasons.append("未出现第4次进入5%范围，沿用持续稳定判据")
+            reasons.append("第4次入带次数不足或未晚于峰值，沿用峰值后的持续稳定判据")
         elif reason == "fewer_than_four_band_entries_and_not_settled":
-            reasons.append("不足4次进入5%范围，且观察期内未持续稳定")
+            reasons.append("未获得严格晚于峰值的有效第4次入带，且峰值后未满足持续稳定观察条件")
         elif reason:
             reasons.append(PWR_STEP_REASON_TEXT.get(reason, reason))
         if basis == "five_point_response_estimate":
@@ -712,7 +729,7 @@ def _power_change_5pct_pass(pre_P_mean_pu, event_end_P_mean_pu):
 
 
 def _is_freq_reg_limit_case(meta):
-    """Return True for normal FREQ_REG cases at the requested deviations."""
+    """Return True for normal regulation cases with |delta f| >= 0.25 Hz."""
     if is_freq_reg_deadband(meta):
         return False
 
@@ -731,11 +748,7 @@ def _is_freq_reg_limit_case(meta):
     if not math.isfinite(deviation):
         return False
 
-    return any(
-        math.isclose(deviation, target, rel_tol=0.0,
-                     abs_tol=FREQ_REG_FREQ_MATCH_TOL_HZ)
-        for target in FREQ_REG_LIMIT_DEVIATIONS_HZ
-    )
+    return deviation >= min(FREQ_REG_LIMIT_DEVIATIONS_HZ) - FREQ_REG_FREQ_MATCH_TOL_HZ
 
 
 def _event_end_power_change(stats, t_sim, P_pu, ev):

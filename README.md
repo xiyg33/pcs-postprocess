@@ -132,6 +132,18 @@ Word 报告；FRT 的图和分段偏差计算见下一节。
 
 ### FREQ_REG SIM/HIL 对比
 
+PWR、FREQ_REG 普通响应和 INERTIA 统一要求 **`T_up < T_p < T_s`**：90%上升时间、
+实测响应方向峰值时间、稳定时间从各自同一响应起点计时。峰值沿用第一响应观察段的
+实测最大值，不为满足顺序改选峰值。单源分析仅选择严格晚于峰值的真实稳定采样点，
+并继续要求原稳定带和观察时长；不通过排序、增加常数或舍入制造先后关系。
+PWR/FREQ_REG 仍优先采用第4次入带估算，不晚于峰值时回退峰值后的持续稳定判据；
+INERTIA 采用峰值后的持续稳定判据。第4次入带不代表之后持续稳定。
+compare 引用旧汇总时也检查此规则：峰值不晚于已知上升时间时峰值时间及其偏差留空；
+稳定时间不晚于峰值、或缺少可确认顺序的上升/峰值时，稳定时间及相关偏差留空。
+状态为 `unavailable`，原因提示重新计算单源指标。已有独立峰值可在上升时间缺失时保留，
+但不能据此输出稳定时间。其他指标继续输出，原始汇总
+不会被 compare 修改。各模式清单的 `settling_time_rule` 记录该规则，CSV 列名保持兼容。
+
 先重新生成双方单源汇总，再运行对比；`--no-fig` 可用于只更新指标：
 
 ```powershell
@@ -149,6 +161,11 @@ pcs-postprocess compare --mode freq_reg --all
 第一阶跃指标时会要求重新运行单源分析。对比只引用汇总，不重新计算指标或检测响应沿。
 
 普通工况每例输出第一段有功阶跃的 `M_p`、`T_up`、`T_p`、`T_s` 四行。
+对于 `|freq_deviation_hz| >= 0.25` 的普通工况，另输出一行 `P_change_signed_pu`
+出力限幅指标，引用单源汇总的“扰动末段 1 s 平均出力 − 扰动前平均出力”（pu）。
+正值为上调、负值为下调；保留实测符号，不按预期方向改写或裁剪。
+该行同时保留双方的扰动前、末段出力及 `freq_reg_upward_limit_pu` /
+`freq_reg_downward_limit_pu`，偏差为 SIM − HIL。缺失指标留空并注明原因。
 频率事件仍用于录波对齐；计时起点独立检测有功响应，复用 PWR 的响应沿及五点辅助方法，
 标记为估算依据，不能当作频率指令时刻。阶跃检测幅值由频率扰动前 0.5 s 与第一保持段
 结束前 0.5 s 的实测均值差估算，预期有功方向与频率偏差相反；没有足够数据或方向错误
@@ -243,6 +260,9 @@ F1 为 A/B2/C2 的均值差绝对值，F2 为 B1/C1 的平均绝对误差，F3 �
 Ip/Iq 指标使用功率电流叠加图中的同一条曲线：三相电压定向瞬时电流除以配置的峰值
 电流基准，再经 20 ms 平滑和 5 ms 降采样。低于 0.05 pu 电压的无效电流保留 NaN，
 受影响窗口的指标及该电流的 FG 留空，其他信号仍独立计算。
+`compare_frt.deviations_for_windows(pair, definitions, estimated=False)` 接受显式的
+A/B1/B2/C1/C2 窗口及每个来源的时间原点，供连续事件复用相同公式；普通 FRT 的
+`deviations()` 仍采用原来的单故障窗口和对时估算状态。
 
 故障持续时间配置不同时仍绘图、计算。清单的 `duration_assessment` 比较恢复分别对齐与
 只对齐起点的九项指标，并用较长实测故障时长构造暂态/保护间隔作窗口敏感性检查。
@@ -458,3 +478,40 @@ compare 不修改单源结果。显式 `--output` 可指定一个新的对比目
 指定展示配置时，对比 CSV 与逐案例清单追加 `display_case_name`、
 `reported_P_ref_pu`、`source_P_ref_pu` 和 `approximation`，原有字段保留原值。
 项目专有的案例编号、近似许可和连续录波配对由伙伴仓库管理，本包不硬编码这些选择。
+
+## 参考限值达标评价
+
+在已有 SIM/HIL 对比指标上运行独立评价，不改录波、单源汇总或图片：
+
+```powershell
+pcs-postprocess assess --compare-dir <交付目录>
+pcs-postprocess assess --compare-dir <交付目录> --mode frt volt_prot freq_prot
+pcs-postprocess assess --compare-dir <交付目录> --standards <标准.json> --output <新目录>
+```
+
+默认标准 `standards/reference_limits_v1.json` 随包安装，转录自用户提供的参考图，
+保存图名和 SHA256。FRT 对五个信号的九项 F1/F2/F3/FG 偏差逐项判断；电压
+F1/F2/F3/FG 限值为 0.02/0.05/0.05/0.05 pu，P/Q/Ip/Iq 为
+0.10/0.20/0.15/0.15 pu，绝对偏差等于限值时达标。
+
+四类输出为 `compliance_frt.csv`、`compliance_conti_frt.csv`、
+`compliance_volt_prot.csv`、`compliance_freq_prot.csv`。
+`conti_frt` 模式合并连续 FRT/LVRT，由 `continuous_type`、`record_id`、
+`event_index` 区分，要求逐故障段的 `compare_performance_conti_frt.csv`；
+不能用旧整段 MAE 汇总代替。可用 `--continuous-performance <CSV>` 显式指定该表。
+每例/段必须包含五个信号和九个指标列；缺值仍保留该行，只对缺值项输出无法判定。
+公共评价命令不生成缺失的连续性能表，由伙伴适配器负责补齐。
+
+保护按工况目标电压/频率匹配参考区间，按 SIM/HIL 各自保存的 `delta_t=t2−t1`
+判断，不能以双方时间偏差替代达标判定。确认时间用作总响应上限，不加工程容差；
+频率Ⅰ段要求 breaker 保持闭合，功率转换及其确认时间不在评价范围内。
+未触发保护和正常适应性工况也要求保持闭合。完整观察窗口内该跳未跳或不该跳却跳
+均不达标；缺 breaker、扰动未确认、已断开、观察不足或计时不一致则无法判定。
+
+有效 `estimated` 指标照常判断，并保留来源状态与估算标记。
+详细表保留原值，追加限值、逐项/分侧 verdict 和综合 `assessment_verdict`；
+综合结论优先级为不达标、无法判定、达标。结果以 UTF-8 BOM CSV 输出，
+另有 `compliance_summary.csv`、`standards_snapshot.json` 和 `manifest.json`
+记录输入哈希、规则版本及计时口径。`source_csv` 指向原表，原有图片引用以该源表目录解析。
+默认新建 `<交付目录>/assessment/<运行时间>/`，存在的输出目录不会覆盖。
+评价完成返回 0，达标失败不代表处理程序出错；输入合同/读取错误返回 2。
